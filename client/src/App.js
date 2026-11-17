@@ -1,292 +1,119 @@
-import React, {useEffect, useState} from "react"; 
+import React, { useEffect, useState } from 'react';
 import './App.css';
-import Axios from "axios";
 import 'fontsource-roboto';
-import Button from '@material-ui/core/Button';
-import TextField from '@material-ui/core/TextField';
-import { Grid, ButtonGroup, Card, Hidden } from "@material-ui/core";
-import AppBar from '@material-ui/core/AppBar';
-import Toolbar from '@material-ui/core/Toolbar';
-import IconButton from '@material-ui/core/IconButton';
-import AccountCircle from '@material-ui/icons/AccountCircle';
-import MenuItem from '@material-ui/core/MenuItem';
-import Menu from '@material-ui/core/Menu';
-import MenuIcon from '@material-ui/icons/Menu';
+import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@material-ui/core';
 
-
-
-
-
-
+async function api(path, body) {
+  const response = await fetch(`/api/${path}`, body === undefined ? {} : {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.message || 'Request failed.');
+  return data;
+}
 
 function App() {
- 
-  const [usernameReg, setUsernameReg] = useState('');
-  const [passwordReg, setPasswordReg] = useState('');
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [loginStatus, setLoginStatus] = useState('');
-  const [usernameTextIDs, setUsernameTextIDs] = useState('');
-  const [anchorEl, setAnchorEl] = React.useState(null);
-  const open = Boolean(anchorEl);
-  const [passwordTextIDs, setPasswordTextIDs] = useState('');
-  const handleMenu = (event) => {
-    setAnchorEl(event.currentTarget);
-  };
-  const handleClose = () => {
-    setAnchorEl(null);
-  };
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
 
-  
+  useEffect(() => {
+    let active = true;
+    api('session').then(data => { if (active) setUser(data.user); })
+      .catch(error => { if (active) setMessage(error.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
 
-
-
-  Axios.defaults.withCredentials = true;
-
-  const register = () => {
-    Axios.post("http://localhost:3001/register", {
-      username: usernameReg,
-      password: passwordReg,
-    }).then((response) => {
-      console.log(response.data);
+  async function perform(action) {
+    setBusy(true);
+    setMessage('');
+    try { await action(); }
+    catch (error) { setMessage(error.message); }
+    finally { setBusy(false); }
+  }
+  const login = event => {
+    event.preventDefault();
+    perform(async () => {
+      const data = await api('login', { username, password });
+      setUser(data.user);
+      setPassword('');
     });
   };
-
-  const login = () => {
-    Axios.post("http://localhost:3001/login", {
-      username: username,
-      password: password,
-    }).then((response) => {
-      if (response.data.message){
-        setLoginStatus(response.data.message);
-        setUsernameTextIDs("standard-error-helper-text");
-        setPasswordTextIDs("standard-error-helper-text");
-      } else {
-        setLoginStatus(response.data[0].Username);
-        setUsernameTextIDs("standard-basic");
-        setPasswordTextIDs("standard-password-input");
-      }
+  const register = () => perform(async () => {
+    const data = await api('register', { username, password });
+    setMessage(data.message);
+    setPassword('');
   });
+  const logout = () => perform(async () => {
+    await api('logout', {});
+    setUser(null);
+    setPassword('');
+    setNewPassword('');
+    setConfirmation('');
+    setChangingPassword(false);
+  });
+  const changePassword = event => {
+    event.preventDefault();
+    perform(async () => {
+      if (newPassword !== confirmation) throw new Error('New passwords must match.');
+      const data = await api('change-password', { currentPassword: password, newPassword });
+      setUser(data.user);
+      setPassword('');
+      setNewPassword('');
+      setConfirmation('');
+      setChangingPassword(false);
+      setMessage('Your password has been changed.');
+    });
   };
-
-  useEffect(() =>{
-    Axios.get("http://localhost:3001/login").then((response) => {
-      if(response.data.loggedIn === true){
-      setLoginStatus(response.data.user[0].Username);
-      }
-  })
-  });
-
-
-
+  const mustChange = user && (user.mustChangePassword || changingPassword);
 
   return (
-
     <div className="App">
-
-     <AppBar position="static">
-        <Toolbar 
-        style={{
-          justifyContent: 'center',
-          display: "inline-flex",
-        }}
-        >
-          <Hidden xsDown>
-      
-          <ButtonGroup 
-          color="inherit"
-           variant="text" 
-           aria-label="text primary button group">
-          <Button>Home</Button>
-          <Button>Cadets</Button>
-          <Button>Stock Management</Button>
-          <Button>Staff Accounts</Button>
-          </ButtonGroup>
-         
-          <IconButton
-                aria-label="account of current user"
-                aria-controls="menu-appbar"
-                aria-haspopup="true"
-                onClick={handleMenu}
-                color="inherit"
-              >
-                <AccountCircle />
-              </IconButton>
-              <Menu
-                id="menu-appbar"
-                anchorEl={anchorEl}
-                anchorOrigin={{
-                  vertical: 'top',
-                  horizontal: 'center',
-                }}
-                
-                open={open}
-                onClose={handleClose}
-              >
-                <MenuItem onClick={handleClose}>My Profile</MenuItem>
-                <MenuItem onClick={handleClose}>Logout</MenuItem>
-              </Menu>
-              </Hidden>
-
-             <Hidden smUp>
-              <IconButton
-                aria-label="more"
-                aria-controls="menu-appbar"
-                aria-haspopup="true"
-                onClick={handleMenu}
-                color="inherit"
-              >
-                <MenuIcon />Menu
-              </IconButton>
-              <Menu
-                id="menu-appbar"
-                anchorEl={anchorEl}
-                anchorOrigin={{
-                  vertical: 'top',
-                  horizontal: 'center',
-                }}
-                
-                open={open}
-                onClose={handleClose}
-              >
-                <MenuItem onClick={handleClose}>Home</MenuItem>
-                <MenuItem onClick={handleClose}>Cadets</MenuItem>
-                <MenuItem onClick={handleClose}>Stock Management</MenuItem>
-                <MenuItem onClick={handleClose}>Staff Accounts</MenuItem>
-              </Menu>
-              </Hidden>
-              
-             
-          
-          
-        </Toolbar>
-      </AppBar>
-
-      <Grid container
-        direction="column"
-        alignItems="center"
-        spacing={1} 
-      >
-
-<Grid item xs={4}>
-        <Card
-        style={
-          {
-           justifyContent: 'center',
-           display: 'inline-flex',
-           maxWidth: '300px',
-           minWidth: '190px',
-           margin: 10,
-          }
-        } 
-        >
-
-      <div 
-      className="registration"
-      style={
-        {
-
-         margin: 10 ,
-        }
-      
-      }
-      >
-        <h1>Registration</h1>
-        <TextField id={usernameTextIDs} label="Username" 
-        onChange={(e) =>{
-          setUsernameReg(e.target.value);
-        }}
-         />
-       <TextField
-          id={passwordTextIDs}
-          label="Password"
-          type="password" 
-        onChange={(e) => {
-          setPasswordReg(e.target.value)
-        }}
-        />
-      
-        <Button 
-        variant="contained" 
-        color="primary" 
-        style={
-          {
-           justifyContent: 'center',
-           display: "inline-flex",
-           margin: 12,}
-        
-        }
-        onClick = {register}>Register</Button>
-        </div>
+      <AppBar position="static"><Toolbar style={{ justifyContent: 'space-between' }}>
+        <Typography variant="h6">RAFACSIMS</Typography>
+        {user && <Button color="inherit" disabled={busy} onClick={logout}>Log out</Button>}
+      </Toolbar></AppBar>
+      <main>
+        <Card className="account-card">
+          {loading ? <Typography>Loading your session…</Typography> : mustChange ? (
+            <form onSubmit={changePassword}>
+              <Typography variant="h5" component="h1">Change your password</Typography>
+              <p>{user.mustChangePassword ? 'You must replace your initial password before continuing.' : 'Choose a new password for your account.'}</p>
+              <TextField fullWidth required label="Current password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
+              <TextField fullWidth required label="New password" type="password" autoComplete="new-password" value={newPassword} inputProps={{ minLength: 12, maxLength: 128 }} onChange={e => setNewPassword(e.target.value)} helperText="Use 12–128 characters." />
+              <TextField fullWidth required label="Confirm new password" type="password" autoComplete="new-password" value={confirmation} onChange={e => setConfirmation(e.target.value)} />
+              <Button type="submit" variant="contained" color="primary" disabled={busy}>Save password</Button>
+            </form>
+          ) : user ? (
+            <>
+              <Typography variant="h5" component="h1">Welcome, {user.username}</Typography>
+              <p>You are signed in{user.role === 'admin' ? ' as an administrator' : ''}.</p>
+              <Button disabled={busy} onClick={() => { setChangingPassword(true); setMessage(''); }}>Change password</Button>
+            </>
+          ) : (
+            <form onSubmit={login}>
+              <Typography variant="h5" component="h1">Sign in or register</Typography>
+              <TextField fullWidth required label="Username" autoComplete="username" value={username} inputProps={{ maxLength: 40 }} onChange={e => setUsername(e.target.value)} />
+              <TextField fullWidth required label="Password" type="password" autoComplete="current-password" value={password} inputProps={{ maxLength: 128 }} onChange={e => setPassword(e.target.value)} />
+              <Button type="submit" variant="contained" color="primary" disabled={busy}>Sign in</Button>
+              <Button type="button" disabled={busy} onClick={register}>Register</Button>
+              <p>New accounts require a password of at least 12 characters.</p>
+            </form>
+          )}
+          {message && <p role="status" aria-live="polite">{message}</p>}
         </Card>
-        </Grid>
-
-        <Grid item xs={4}>
-        <Card
-        style={
-          {
-           justifyContent: 'center',
-           display: 'inline-flex',
-           maxWidth: '300px',
-           minWidth: '190px',
-           margin: 10,
-          }
-        } 
-        >
-
-        <div 
-        className="login" 
-        style={
-          {
-           justifyContent: 'center',
-           display: 'inline-block',
-           margin: 12,}
-        
-        }>
-          <h1>Login</h1>
-          <TextField id={usernameTextIDs} label="Username" 
-          onChange={(e) =>{
-          setUsername(e.target.value);
-        }}/>
-        
-        <TextField
-          id={passwordTextIDs}
-          label="Password"
-          type="password"
-          onChange={(e) => {
-            setPassword(e.target.value)
-          }}/>
-        
-          <Button 
-          variant="contained" 
-          color="primary" 
-          style={
-            {
-
-             justifyContent: 'center',
-             display: "inline-flex",
-             margin: 12,}
-          
-          }
-          onClick={login}>Login</Button>
-      </div>
-      </Card>
-      </Grid>
-      </Grid>
-
-
-        <h1
-        style={
-          {color: 'white',}
-        }
-        >
-          {loginStatus}
-          </h1>
-       
-     </div>
-     //</div>
+      </main>
+    </div>
   );
-        }
-
+}
 
 export default App;
