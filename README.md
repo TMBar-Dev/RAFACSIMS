@@ -2,6 +2,34 @@
 
 The React frontend and authentication API deploy together as the `rafacsims` Worker. D1 is accessed through the `DB` binding. No MySQL server or Express process is needed.
 
+## Management database schema
+
+`schema.js` defines four management tables alongside the existing authentication tables. After this version is deployed, the next API request runs the Worker's idempotent initialization and creates any missing tables. Preparing or pushing this code does not write to the remote database. The existing D1 database ID, users, sessions and account passwords are preserved; no existing-account import or password reset is required.
+
+| Table | Fields and constraints |
+| --- | --- |
+| `staff` | `id`; optional unique `user_id` linking an account; optional unique `service_number`; `first_name`, `last_name`, `rank`, `appointment`, `email`, `phone`; `status` of `active` or `inactive`; `created_at`, `updated_at`. |
+| `cadets` | `id`; optional unique `service_number`; `first_name`, `last_name`, `rank`, `flight`; optional `date_joined` in `YYYY-MM-DD` form; `status` of `active`, `inactive` or `left`; `created_at`, `updated_at`. |
+| `stock` | `id`; unique `reference`; `description`, `category`, `size`; nonnegative integer `quantity` and `reorder_level`; `location`; `created_at`, `updated_at`. |
+| `orders` | `id`; unique `order_number`; required `stock_id`; positive integer `quantity`; `order_type` of `issue`, `return` or `restock`; `status` of `draft`, `submitted`, `fulfilled` or `cancelled`; optional `cadet_id`, `staff_id`, `created_by_user_id`; `notes`; `created_at`, `updated_at`. |
+
+Relationships and initial assumptions:
+
+- A staff record may link to one user account; the unique `user_id` prevents multiple staff records linking to the same account. Deleting that account sets the staff link to null rather than deleting the staff record.
+- Staff appointment/status fields describe the profile only. Sign-in permissions still come from the existing `users` table; these profile fields do not grant or revoke login access.
+- Each order initially represents one stock item. Its required `stock_id` prevents deletion of referenced stock while an order still references it.
+- Optional order links identify a cadet, staff member and creating user account. Deleting one of those linked records sets its corresponding order reference to null; it does not delete the order.
+- Timestamps are Unix seconds. `updated_at` receives an initial value when a record is created; future write handlers must update it explicitly. There is no automatic timestamp-update trigger.
+- Creating or changing an order does not automatically change stock quantities. That workflow has not been implemented.
+
+This change provides the data schema only. Cadets, Stock Management and Staff Accounts remain frontend templates, and there are no management-record create/read/update/delete endpoints or working record-entry controls yet. User Management remains the separate working account feature. `CREATE TABLE IF NOT EXISTS` initializes missing tables; it is not a general migration mechanism for altering an existing table's columns.
+
+### Schema change review: 17 November 2026
+
+Static review completed with no blocking findings. All eight isolated tests passed with zero failures, covering additive/idempotent table setup, record/password preservation, relationships and deletion behavior, quantity/status validation, no automatic stock changes, and the existing account API regressions.
+
+`npm test` runs the root `*.test.mjs` suites, including `schema.test.mjs` and `users-api.test.mjs`. The recorded run used `node --test --test-isolation=none users-api.test.mjs schema.test.mjs`. These checks use isolated test storage and do not access or modify live D1 records. A passing isolated test run does not establish successful Cloudflare deployment or browser behavior. No local frontend build or browser verification has been performed.
+
 ## Current pages and templates
 
 After signing in and completing any required password change, the application provides these navigation destinations:
@@ -14,7 +42,7 @@ After signing in and completing any required password change, the application pr
 | Stock Management | `#/stock` | Stock register layout, proposed columns and empty-state guidance. |
 | Staff Accounts | `#/staff` | Staff register layout for administrators, with no staff data connected. |
 
-Dashboard, Cadets, Stock Management and Staff Accounts are page templates while the original application code is being located. Their record tables are intentionally empty. Record-entry, search, import and export controls shown in those templates are disabled; they do not save management records or pretend an operation succeeded. The templates add no cadet, stock or staff database tables or management endpoints. User Management is a separate working feature, not an empty register template.
+Dashboard, Cadets, Stock Management and Staff Accounts are page templates while the original application code is being located. Their displayed record tables are intentionally empty and are not connected to the management database tables described above. Record-entry, search, import and export controls shown in those templates are disabled; they do not save management records or pretend an operation succeeded. There are no cadet, stock, staff-profile or order management endpoints yet. User Management is a separate working feature, not an empty register template.
 
 The Staff Accounts navigation item and template are restricted to the administrator view. This frontend visibility rule is not an authorization boundary. Any future staff-profile API must enforce its own server-side administrator checks before real records are connected. The working User Management API already checks administrator permission and completed mandatory password changes on the server.
 
@@ -34,7 +62,7 @@ This change adds navigation, four clearly labelled templates and live administra
 
 Source review is complete. All five isolated SQLite API tests passed with zero failures, covering administrator/ordinary-user/first-login permission gates, account validation and creation, safe cursor pagination, and existing login/logout/password-change behavior. The tests use real password hashing against in-memory test storage; no live D1 records were accessed or changed.
 
-`npm test` runs `users-api.test.mjs`. In a sandbox that blocks test-runner child processes, use `node --test --test-isolation=none users-api.test.mjs`; this was the command used for the recorded passing run. These API tests do not build the frontend or establish browser/Cloudflare compatibility. No local frontend build or browser verification has been performed. After deployment, check all existing account flows, role restrictions, list pagination and creation followed by mandatory first-login password change.
+At the time of this review, `npm test` ran `users-api.test.mjs`. In a sandbox that blocks test-runner child processes, use `node --test --test-isolation=none users-api.test.mjs`; this was the command used for the recorded passing run. The current test script also includes the later schema suite described above. These API tests do not build the frontend or establish browser/Cloudflare compatibility. No local frontend build or browser verification has been performed. After deployment, check all existing account flows, role restrictions, list pagination and creation followed by mandatory first-login password change.
 
 Dependencies and D1/deployment configuration are unchanged. The Worker gains only the account-management endpoints described below; the frontend adds `users.jsx` and navigation to it. The existing template source comparison below applies to the template-only work before User Management was added, not proof that the new API has been verified.
 
@@ -97,7 +125,7 @@ Before marking this layout verified in production:
 
 Remove any previous `--assets` command-line argument: wrangler.jsonc configures both the Worker API and assets. The build identity must have permission to deploy Workers and bind the specified D1 database. The database name in the config assumes `rafacsims`; adjust it if you chose another name. The database ID is already configured.
 
-The first API request creates the users/sessions tables and inserts admin only if the account does not already exist. No manual SQL or separate migration command is required for this initial version. D1 must already exist; this code does not create the Cloudflare database resource.
+The first API request after deployment creates any missing authentication and management tables and inserts admin only if the account does not already exist. No manual SQL or separate migration command is required for these initial table definitions. D1 must already exist; this code does not create the Cloudflare database resource.
 
 ## First sign-in
 
@@ -108,7 +136,7 @@ Sign in immediately after deployment and replace the initial password. The API r
 
 Public registration creates ordinary users, never administrators. Sessions use random tokens, stored hashed in D1, in Secure/HttpOnly/SameSite cookies with a 24-hour expiry. Password changes invalidate all prior sessions and issue a fresh token. API responses return only explicitly allowed account fields; password hashes and session tokens are never returned in response bodies.
 
-Authentication and administrator account listing/creation are implemented. Cadet, stock and staff-profile management currently have frontend templates only; their record-management functionality and database connections have not yet been implemented. No existing MySQL account export was available, so existing accounts are not imported.
+Authentication and administrator account listing/creation are implemented. Cadet, stock and staff-profile pages remain frontend templates. Their database schema, plus orders, is defined in schema.js, but record-management APIs and page connections have not yet been implemented. No existing MySQL account export was available, so existing accounts are not imported.
 
 ## API
 
@@ -132,6 +160,8 @@ The unused Express/MySQL backend and its duplicate dependency manifests have bee
 - templates.jsx: Dashboard and reusable Cadets, Stock Management and Staff Accounts page templates.
 - users.jsx: live administrator account listing, pagination and account creation.
 - worker.js: authentication API, sessions and D1 table setup.
+- schema.js: management table definitions, constraints and relationships used during Worker initialization.
+- schema.test.mjs: isolated SQLite tests for the management schema; no live D1 writes.
 - users-api.test.mjs: isolated SQLite-backed API checks, invoked with npm test; not a live D1 or frontend/browser test.
 - index.html: HTML template used by build.mjs.
 - bg.jpg, favicon.ico, manifest.json and robots.txt: public assets.

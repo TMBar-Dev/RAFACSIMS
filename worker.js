@@ -1,5 +1,7 @@
 // Cloudflare Worker entry point: API requests use D1; other requests serve the
 // generated frontend through ASSETS. Never serve the repository root itself.
+import { MANAGEMENT_SCHEMA } from './schema.js';
+
 const encoder = new TextEncoder();
 // Keep this compatible with stored PBKDF2 records and the Workers runtime.
 const ITERATIONS = 100000;
@@ -34,6 +36,9 @@ async function initialize(db) {
     db.prepare(`CREATE TABLE IF NOT EXISTS rate_limits (
       bucket TEXT PRIMARY KEY, hits INTEGER NOT NULL, expires_at INTEGER NOT NULL
     )`),
+    // Add the empty management tables without changing existing authentication
+    // records. Their page templates remain disconnected until APIs are added.
+    ...MANAGEMENT_SCHEMA.map(statement => db.prepare(statement)),
     db.prepare(`INSERT OR IGNORE INTO users
       (username, password_hash, role, must_change_password) VALUES ('admin', ?, 'admin', 1)`)
       .bind(ADMIN_HASH)
