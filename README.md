@@ -2,9 +2,64 @@
 
 The React frontend and authentication API deploy together as the `rafacsims` Worker. D1 is accessed through the `DB` binding. No MySQL server or Express process is needed.
 
-## Behaviour review: 17 November 2026
+## Current pages and templates
+
+After signing in and completing any required password change, the application provides these navigation destinations:
+
+| Page | Application route | Current scope |
+| --- | --- | --- |
+| Dashboard | `#/dashboard` | Overview and links to management pages and templates. |
+| User Management | `#/users` | Working administrator-only account list and account creation, backed by the existing D1 users table. |
+| Cadets | `#/cadets` | Cadet register layout, proposed columns and empty-state guidance. |
+| Stock Management | `#/stock` | Stock register layout, proposed columns and empty-state guidance. |
+| Staff Accounts | `#/staff` | Staff register layout for administrators, with no staff data connected. |
+
+Dashboard, Cadets, Stock Management and Staff Accounts are page templates while the original application code is being located. Their record tables are intentionally empty. Record-entry, search, import and export controls shown in those templates are disabled; they do not save management records or pretend an operation succeeded. The templates add no cadet, stock or staff database tables or management endpoints. User Management is a separate working feature, not an empty register template.
+
+The Staff Accounts navigation item and template are restricted to the administrator view. This frontend visibility rule is not an authorization boundary. Any future staff-profile API must enforce its own server-side administrator checks before real records are connected. The working User Management API already checks administrator permission and completed mandatory password changes on the server.
+
+Existing registration, sign-in, session restoration, logout and password-change flows remain the account foundation. Management templates mount only after an authenticated session is restored or established and the account no longer requires its initial password to be changed. The optional password-change form remains available from the signed-in interface.
+
+### User Management
+
+Administrators can open `#/users` to list real accounts, refresh the list, move between pages and create a new ordinary user or administrator. Lists contain at most 25 accounts per page and use the returned cursor for the next page; the interface retains previous cursors for Previous navigation.
+
+Account creation requires a unique username of 3–40 letters, numbers, dots, underscores or hyphens, a role of `user` or `admin`, and a temporary password of 12–128 characters entered twice. Every account created this way must change that temporary password on its first login. Existing account passwords are not reset. Editing roles, deleting accounts and resetting existing passwords are not implemented by this feature.
+
+Staff Accounts remains a separate staff-profile template; account creation does not create a staff-profile record. Existing public registration remains available and creates ordinary users only.
+
+### Page and User Management change review: 17 November 2026
+
+This change adds navigation, four clearly labelled templates and live administrator-only user listing/creation. Existing registration, login, session restoration, logout and password-change flows must retain their current contracts. User Management reuses the existing users table; no database replacement, account import or existing-password reset is required.
+
+Source review is complete. All five isolated SQLite API tests passed with zero failures, covering administrator/ordinary-user/first-login permission gates, account validation and creation, safe cursor pagination, and existing login/logout/password-change behavior. The tests use real password hashing against in-memory test storage; no live D1 records were accessed or changed.
+
+`npm test` runs `users-api.test.mjs`. In a sandbox that blocks test-runner child processes, use `node --test --test-isolation=none users-api.test.mjs`; this was the command used for the recorded passing run. These API tests do not build the frontend or establish browser/Cloudflare compatibility. No local frontend build or browser verification has been performed. After deployment, check all existing account flows, role restrictions, list pagination and creation followed by mandatory first-login password change.
+
+Dependencies and D1/deployment configuration are unchanged. The Worker gains only the account-management endpoints described below; the frontend adds `users.jsx` and navigation to it. The existing template source comparison below applies to the template-only work before User Management was added, not proof that the new API has been verified.
+
+### Earlier template-only source review: 17 November 2026
+
+The intended change is to replace the signed-in welcome-only screen with navigation and clearly labelled management templates. Existing account requests and responses, credentials, cookie handling and mandatory password-change enforcement must be preserved. Dependencies, the Worker API, D1 configuration and deployment configuration are outside the scope of this template change.
+
+Static source review is complete. The API helper and existing session/account handlers exactly match the preceding commit (`f94c7db`). The Worker, D1 settings, dependencies and build configuration are unchanged.
+
+| Changed file | Review result |
+| --- | --- |
+| `main.jsx` | Adds navigation and replaces the signed-in welcome panel with a workspace. Existing account handlers are preserved. Session loading and required password changes still gate the workspace, including direct hash links. |
+| `templates.jsx` | Defines the four routes and reusable layouts. Staff visibility is administrator-only. Tables have explicit empty states; all record controls are disabled and no management API/storage operations are added. |
+| `App.css` | Adds responsive workspace, navigation and table styles, plus the Roboto font for page text. Existing account forms and their background remain. |
+| `README.md` | Records available routes, template limitations and this review. The historical consolidation review below is retained with its original scope. |
+
+Unknown hash routes fall back to Dashboard. Browser hash navigation updates the active page without a full reload. No new dependencies were added.
+
+Build and browser verification have not been performed locally; the agreed workflow leaves the build to Cloudflare. After deployment, check navigation, page reload/back navigation, ordinary-user versus administrator visibility, and all existing account flows before treating the templates as runtime-verified.
+
+## Folder-consolidation behaviour review: 17 November 2026
 
 **Result: no functionality loss found in the source comparison. Cloudflare build and browser verification of the flattened layout are still pending.**
+
+This historical review covers the folder consolidation only. Its source-equivalence findings do not establish verification of the later page-template changes described above.
 
 Every application file was compared with its previous location in commit `9a18666`, before the client/worker folders were merged into this top-level layout. The comparison covered executable code, static assets, dependency records and deployment paths. Explanatory comments were then added and reviewed separately.
 
@@ -51,9 +106,9 @@ Initial password: RAFACSIMS
 
 Sign in immediately after deployment and replace the initial password. The API restricts this session to password changes, session inspection and logout until the password is changed. A new password must contain 12–128 characters. The initial password is stored as a salted PBKDF2-SHA256 hash, not plaintext. Redeployments never reset an existing admin password. This initial credential is publicly known; whoever signs in first can claim the admin account.
 
-Registration creates ordinary users, never administrators. Sessions use random tokens, stored hashed in D1, in Secure/HttpOnly/SameSite cookies with a 24-hour expiry. Password changes invalidate all prior sessions and issue a fresh token. User records and password hashes are never returned by the API.
+Public registration creates ordinary users, never administrators. Sessions use random tokens, stored hashed in D1, in Secure/HttpOnly/SameSite cookies with a 24-hour expiry. Password changes invalidate all prior sessions and issue a fresh token. API responses return only explicitly allowed account fields; password hashes and session tokens are never returned in response bodies.
 
-This is the authentication foundation. Cadet, stock and staff management functionality has not yet been implemented. No existing MySQL account export was available, so existing accounts are not imported.
+Authentication and administrator account listing/creation are implemented. Cadet, stock and staff-profile management currently have frontend templates only; their record-management functionality and database connections have not yet been implemented. No existing MySQL account export was available, so existing accounts are not imported.
 
 ## API
 
@@ -62,6 +117,10 @@ This is the authentication foundation. Cadet, stock and staff management functio
 - POST /api/login: username, password
 - POST /api/change-password: currentPassword, newPassword
 - POST /api/logout
+- GET /api/users?after=0: administrator-only list of up to 25 accounts. `after` is a nonnegative ID cursor. Returns `users` with `id`, `username`, `role`, `mustChangePassword` and `createdAt`, plus `nextCursor` or null.
+- POST /api/users: administrator-only creation with `username`, `password` and `role`; the created account must change its password on first login.
+
+Both User Management endpoints require an authenticated administrator who has completed any mandatory password change. The existing same-origin JSON checks and write-request rate limit also apply to account creation.
 
 JSON POST requests must include a matching Origin header (automatically sent by the browser). All API responses are private/no-store. Password hashing uses Workers Web Crypto PBKDF2 with 100,000 iterations for runtime compatibility. Authentication requests are rate limited by source IP using D1. Expired rate-limit buckets and sessions are removed opportunistically.
 
@@ -70,7 +129,10 @@ The unused Express/MySQL backend and its duplicate dependency manifests have bee
 ## Files
 
 - main.jsx and App.css: React interface and styling.
+- templates.jsx: Dashboard and reusable Cadets, Stock Management and Staff Accounts page templates.
+- users.jsx: live administrator account listing, pagination and account creation.
 - worker.js: authentication API, sessions and D1 table setup.
+- users-api.test.mjs: isolated SQLite-backed API checks, invoked with npm test; not a live D1 or frontend/browser test.
 - index.html: HTML template used by build.mjs.
 - bg.jpg, favicon.ico, manifest.json and robots.txt: public assets.
 - build.mjs: builds the frontend into build/ and copies only the explicitly listed public files.
@@ -98,4 +160,4 @@ Every changed or moved file must be reviewed against the previous Git version. C
 
 package.json pins the browser dependencies (React, ReactDOM, Material UI and Roboto) and esbuild as the build dependency. package-lock.json records their resolved versions and integrity hashes; regenerate it using npm 10.9.2 rather than editing dependency records by hand. manifest.json describes the browser's app name, launch URL and favicon. robots.txt currently permits crawler access; it is not an authorization mechanism.
 
-The dated behaviour-review report above records the comparison results and remaining deployment/browser checks for the top-level layout. Update it with the outcome when those checks have actually been completed.
+The dated review sections above separate the folder-consolidation comparison from the later template changes. Update each with its actual static, deployment and browser-verification results when those checks have been completed; do not carry a prior change's verification forward as proof for a new change.

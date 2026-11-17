@@ -1,5 +1,6 @@
 /* Page background is bundled from bg.jpg; content can grow and scroll. */
 .App {
+  font-family: Roboto, Arial, sans-serif;
   text-align: center;
   min-height: 100vh;
   background-image: url(./bg.jpg);
@@ -11,3 +12,73 @@ main { padding: 32px 16px; }
 .account-card { max-width: 420px; margin: 0 auto; padding: 28px; }
 .account-card .MuiTextField-root { margin: 12px 0; }
 .account-card .MuiButton-root { margin: 16px 8px 0 0; }
+
+/* Account screens retain the original background. The signed-in workspace uses
+   a solid surface for readable tables and collapses to one column on phones. */
+.app-toolbar { justify-content: space-between; flex-wrap: wrap; gap: 8px; padding-top: 8px; padding-bottom: 8px; }
+.account-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.signed-in-name { font-size: 0.9rem; }
+.workspace { min-height: calc(100vh - 80px); padding: 24px; background: #eef2f6; text-align: left; color: #172c40; }
+.workspace-shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 28px; max-width: 1440px; margin: 0 auto; }
+.workspace-sidebar { padding: 12px 0; }
+.workspace-sidebar nav { display: flex; flex-direction: column; gap: 6px; }
+.workspace-sidebar nav a { padding: 13px 16px; border-radius: 6px; color: #334b62; text-decoration: none; font-weight: 500; }
+.workspace-sidebar nav a:hover { background: #dfe7f0; }
+.workspace-sidebar nav a[aria-current="page"] { background: #233f70; color: white; }
+.workspace-content { min-width: 0; }
+.eyebrow { margin: 0 0 12px; color: #526b83; font-size: 0.75rem; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; }
+.workspace-sidebar .eyebrow { padding-left: 16px; }
+.sidebar-note { padding: 16px; color: #52677b; font-size: 0.8rem; line-height: 1.6; }
+.page-heading { margin-bottom: 24px; }
+.page-heading > p:last-child { color: #52677b; line-height: 1.6; }
+.template-notice { margin-bottom: 24px; padding: 18px 20px; border: 1px solid #b8cce2; border-left: 4px solid #426b96; border-radius: 6px; background: #f6f9fd; color: #304e6a; }
+.template-notice p { margin: 6px 0 0; line-height: 1.6; }
+.module-grid, .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-bottom: 24px; }
+.module-card { padding: 24px; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.module-card p { margin: 0 0 8px; color: #52677b; line-height: 1.6; flex: 1; }
+.template-badge { display: inline-block; padding: 4px 9px; border-radius: 4px; background: #e9eef6; color: #38587c; font-size: 0.75rem; font-weight: 500; }
+.workspace-card { padding: 24px; margin-bottom: 24px; }
+.summary-card { padding: 20px; }
+.summary-value { display: block; margin: 10px 0; font-size: 2rem; }
+.muted { color: #596d80; font-size: 0.875rem; line-height: 1.6; }
+.account-details { display: flex; flex-wrap: wrap; gap: 24px 60px; }
+.account-details dt { margin-bottom: 5px; color: #596d80; font-size: 0.8rem; }
+.account-details dd { margin: 0; font-weight: 500; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.template-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.template-filters { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 14px; margin: 20px 0; }
+.table-scroll { overflow-x: auto; border: 1px solid #dbe2e9; border-radius: 6px; }
+.records-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.records-table th { padding: 14px 16px; background: #f3f6fa; text-align: left; font-weight: 500; white-space: nowrap; border-bottom: 1px solid #dbe2e9; }
+.records-table td { padding: 16px; }
+.empty-state { padding: 42px 16px; text-align: center; color: #52677b; }
+.empty-state p { line-height: 1.6; }
+.detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-top: 24px; }
+.message-banner { padding: 14px 18px; border: 1px solid #b8cce2; border-radius: 6px; background: white; color: #304e6a; }
+/* Live account management shares the workspace layout used by the templates. */
+.create-user-form > .MuiButton-root { margin-top: 8px; }
+.error-message { color: #a52222; line-height: 1.6; }
+.records-table tbody tr + tr td { border-top: 1px solid #e3e9ef; }
+.current-user-label { color: #596d80; font-size: 0.8rem; }
+.password-status { display: inline-block; padding: 4px 8px; border-radius: 4px; background: #e7f3eb; color: #285c3b; font-size: 0.8rem; white-space: nowrap; }
+.password-status.pending { background: #fff2d8; color: #76510e; }
+.pagination-controls { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+/* Keep captions accessible without showing a second copy above each table. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.workspace a:focus-visible, .table-scroll:focus-visible { outline: 3px solid #426b96; outline-offset: 3px; }
+
+@media (max-width: 1050px) {
+  .module-grid { grid-template-columns: 1fr; }
+  .detail-grid, .template-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .workspace { padding: 16px; }
+  .workspace-shell { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .workspace-sidebar { padding: 0; }
+  .workspace-sidebar nav { flex-direction: row; flex-wrap: wrap; }
+  .workspace-sidebar nav a { padding: 10px 12px; }
+  .workspace-sidebar .eyebrow, .sidebar-note { display: none; }
+  .workspace-card, .module-card { padding: 18px; }
+  .summary-grid, .detail-grid, .template-filters { grid-template-columns: minmax(0, 1fr); }
+  .signed-in-name { display: none; }
+}

@@ -79,6 +79,13 @@ function publicUser(user) {
   // Explicit allowlist: never send password hashes or session records to clients.
   return { username: user.username, role: user.role, mustChangePassword: Boolean(user.must_change_password) };
 }
+function requireAdministrator(user) {
+  // Use the current D1 user row from the session lookup, never a browser-supplied
+  // role. A first-login password change is required before account management.
+  if (!user) fail('Please log in.', 401);
+  if (user.must_change_password) fail('Change your password before continuing.', 403);
+  if (user.role !== 'admin') fail('Administrator access is required.', 403);
+}
 function cookie(token, seconds = SESSION_SECONDS) {
   return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${seconds}`;
 }
@@ -115,6 +122,23 @@ async function api(request, env) {
     // Signed-out users get null, allowing the frontend to restore state on load.
     const user = await currentSession(request, env.DB);
     return json({ user: user ? publicUser(user) : null });
+  }
+  if (request.method === 'GET' && path === '/api/users') {
+    requireAdministrator(await currentSession(request, env.DB));
+    // ID-based cursors keep pages stable when new accounts are added. Fetch one
+    // extra row to detect another page without returning an unbounded user list.
+    const cursor = new URL(request.url).searchParams.get('after') ?? '0';
+    if (!/^\d{1,16}$/.test(cursor) || !Number.isSafeInteger(Number(cursor))) fail('Invalid user-list cursor.');
+    const result = await env.DB.prepare(`SELECT id, username, role, must_change_password, created_at
+      FROM users WHERE id > ? ORDER BY id ASC LIMIT 26`).bind(Number(cursor)).all();
+    const users = result.results.slice(0, 25).map(row => ({
+      id: row.id,
+      ...publicUser(row),
+      createdAt: row.created_at
+    }));
+    // Only the explicitly selected public fields leave the Worker. Password
+    // hashes and session tokens are neither queried nor exposed by this endpoint.
+    return json({ users, nextCursor: result.results.length > 25 ? users[users.length - 1].id : null });
   }
   if (request.method !== 'POST') return json({ message: 'Not found.' }, 404);
   if (Number(request.headers.get('Content-Length')) > 4096) fail('Request too large.', 413);
@@ -188,6 +212,24 @@ async function api(request, env) {
   }
   // All future protected endpoints must sit behind this gate.
   if (user.must_change_password) fail('Change your password before continuing.', 403);
+  if (path === '/api/users') {
+    requireAdministrator(user);
+    // Account creation shares the existing JSON/origin/body/rate-limit guards.
+    // Only authenticated administrators may choose a role; public registration
+    // above continues to create ordinary users regardless of request contents.
+    const username = typeof body.username === 'string' ? body.username.trim() : '';
+    if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username)) fail('Username must contain 3-40 letters, numbers, dots, underscores or hyphens.');
+    if (username.toLowerCase() === 'admin') fail('That username is reserved.', 409);
+    if (!['user', 'admin'].includes(body.role)) fail('Choose a valid account role.');
+    validatePassword(body.password);
+    const result = await env.DB.prepare(`INSERT OR IGNORE INTO users
+      (username, password_hash, role, must_change_password) VALUES (?, ?, ?, 1)`)
+      .bind(username, await hashPassword(body.password), body.role).run();
+    if (!result.meta.changes) fail('That username is already registered.', 409);
+    // Do not sign in as the new account or return its temporary password. The
+    // existing administrator session remains active after creating an account.
+    return json({ message: 'Account created. The user must change their temporary password on first login.' }, 201);
+  }
   return json({ message: 'Not found.' }, 404);
 }
 

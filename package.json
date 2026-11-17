@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node build.mjs --dev",
     "dev": "node build.mjs --dev",
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "node --test users-api.test.mjs"
   },
   "dependencies": {
     "@fontsource/roboto": "5.3.0",
