@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import ReactDOM from 'react-dom';
 import './App.css';
-import 'fontsource-roboto';
+import '@fontsource/roboto/400.css';
+import '@fontsource/roboto/500.css';
 import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@material-ui/core';
 
 async function api(path, body) {
@@ -84,12 +86,12 @@ function App() {
       </Toolbar></AppBar>
       <main>
         <Card className="account-card">
-          {loading ? <Typography>Loading your session…</Typography> : mustChange ? (
+          {loading ? <Typography>Loading your sessionâ€¦</Typography> : mustChange ? (
             <form onSubmit={changePassword}>
               <Typography variant="h5" component="h1">Change your password</Typography>
               <p>{user.mustChangePassword ? 'You must replace your initial password before continuing.' : 'Choose a new password for your account.'}</p>
               <TextField fullWidth required label="Current password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
-              <TextField fullWidth required label="New password" type="password" autoComplete="new-password" value={newPassword} inputProps={{ minLength: 12, maxLength: 128 }} onChange={e => setNewPassword(e.target.value)} helperText="Use 12–128 characters." />
+              <TextField fullWidth required label="New password" type="password" autoComplete="new-password" value={newPassword} inputProps={{ minLength: 12, maxLength: 128 }} onChange={e => setNewPassword(e.target.value)} helperText="Use 12â€“128 characters." />
               <TextField fullWidth required label="Confirm new password" type="password" autoComplete="new-password" value={confirmation} onChange={e => setConfirmation(e.target.value)} />
               <Button type="submit" variant="contained" color="primary" disabled={busy}>Save password</Button>
             </form>
@@ -116,4 +118,4 @@ function App() {
   );
 }
 
-export default App;
+ReactDOM.render(<App />, document.getElementById('root'));
