@@ -3,6 +3,8 @@ import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Resolve paths from this script, so running npm from another working directory
+// cannot redirect the build cleanup or change where assets are read.
 const root = dirname(fileURLToPath(import.meta.url));
 const outdir = resolve(root, 'build');
 const development = process.argv.includes('--dev');
@@ -11,25 +13,32 @@ const development = process.argv.includes('--dev');
 if (relative(root, outdir) !== 'build') throw new Error('Invalid build directory.');
 await rm(outdir, { recursive: true, force: true });
 await mkdir(outdir, { recursive: true });
-await cp(resolve(root, 'public'), outdir, { recursive: true });
+// Copy only public files. The Worker, sources and configuration stay private.
+for (const asset of ['favicon.ico', 'manifest.json', 'robots.txt']) {
+  await cp(resolve(root, asset), resolve(outdir, asset));
+}
 
 function assetUrl(path) {
+  // esbuild's metadata paths are relative to root. Published URLs are relative
+  // to build/ and always use forward slashes, including when built on Windows.
   return '/' + relative(outdir, resolve(root, path)).split(sep).join('/');
 }
 
 const options = {
   absWorkingDir: root,
-  entryPoints: ['src/main.jsx'],
+  entryPoints: ['main.jsx'],
   outdir,
   bundle: true,
   platform: 'browser',
   format: 'esm',
   target: ['chrome111', 'edge111', 'firefox114', 'safari16.4'],
   jsx: 'transform',
+  // React and Material UI select development/production behavior using this value.
   define: { 'process.env.NODE_ENV': JSON.stringify(development ? 'development' : 'production') },
   minify: !development,
   sourcemap: development,
   metafile: true,
+  // Content hashes prevent browsers reusing old scripts, styles, images or fonts.
   entryNames: 'assets/[name]-[hash]',
   assetNames: 'assets/[name]-[hash]',
   publicPath: '/',
@@ -40,8 +49,10 @@ const options = {
     setup(builder) {
       builder.onEnd(async result => {
         if (result.errors.length) return;
+        // Read generated filenames instead of guessing hashes or hard-coding
+        // bundle names. Imported CSS is emitted separately and linked here.
         const entry = Object.entries(result.metafile.outputs)
-          .find(([path, info]) => path.endsWith('.js') && info.entryPoint === 'src/main.jsx');
+          .find(([path, info]) => path.endsWith('.js') && info.entryPoint === 'main.jsx');
         if (!entry || !entry[1].cssBundle) throw new Error('Missing application JavaScript or CSS bundle.');
         const template = await readFile(resolve(root, 'index.html'), 'utf8');
         const html = template
@@ -54,6 +65,7 @@ const options = {
 };
 
 if (development) {
+  // Frontend preview only: this does not emulate Worker routes or the D1 binding.
   const session = await context(options);
   await session.watch();
   const { port } = await session.serve({ servedir: outdir, host: '127.0.0.1', port: 5173, fallback: 'index.html' });

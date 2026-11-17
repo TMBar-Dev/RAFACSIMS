@@ -1,10 +1,12 @@
+/* Page background is bundled from bg.jpg; content can grow and scroll. */
 .App {
   text-align: center;
   min-height: 100vh;
-  background-image: url(./images/bg.jpg);
+  background-image: url(./bg.jpg);
   background-size: cover;
   background-position: center;
 }
+/* Keep the account form readable on small screens without changing MUI inputs. */
 main { padding: 32px 16px; }
 .account-card { max-width: 420px; margin: 0 auto; padding: 28px; }
 .account-card .MuiTextField-root { margin: 12px 0; }

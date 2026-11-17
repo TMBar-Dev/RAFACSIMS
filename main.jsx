@@ -5,6 +5,9 @@ import '@fontsource/roboto/400.css';
 import '@fontsource/roboto/500.css';
 import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@material-ui/core';
 
+// The interface and API share an origin. The browser sends the HttpOnly session
+// cookie automatically; JavaScript never needs to read or store its token.
+// A missing body means GET; supplying a body means a JSON POST.
 async function api(path, body) {
   const response = await fetch(`/api/${path}`, body === undefined ? {} : {
     method: 'POST',
@@ -17,16 +20,20 @@ async function api(path, body) {
 }
 
 function App() {
+  // `user` contains only the public account fields returned by worker.js.
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [username, setUsername] = useState('');
+  // Reused for sign-in and the current-password check; cleared after success.
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
 
+  // Restore the existing session once at startup. Ignore a response arriving
+  // after unmount instead of updating a component that is no longer active.
   useEffect(() => {
     let active = true;
     api('session').then(data => { if (active) setUser(data.user); })
@@ -35,6 +42,7 @@ function App() {
     return () => { active = false; };
   }, []);
 
+  // Keep submission/loading/error behavior consistent across account actions.
   async function perform(action) {
     setBusy(true);
     setMessage('');
@@ -42,6 +50,7 @@ function App() {
     catch (error) { setMessage(error.message); }
     finally { setBusy(false); }
   }
+  // The response determines whether the account must replace its password.
   const login = event => {
     event.preventDefault();
     perform(async () => {
@@ -50,11 +59,13 @@ function App() {
       setPassword('');
     });
   };
+  // Registration creates an ordinary account; it does not sign the user in.
   const register = () => perform(async () => {
     const data = await api('register', { username, password });
     setMessage(data.message);
     setPassword('');
   });
+  // Clear local account/password state only after the server ends the session.
   const logout = () => perform(async () => {
     await api('logout', {});
     setUser(null);
@@ -63,6 +74,8 @@ function App() {
     setConfirmation('');
     setChangingPassword(false);
   });
+  // Confirm the new value here; worker.js verifies the current password,
+  // invalidates older sessions and replaces the cookie after saving the change.
   const changePassword = event => {
     event.preventDefault();
     perform(async () => {
@@ -76,8 +89,11 @@ function App() {
       setMessage('Your password has been changed.');
     });
   };
+  // This chooses the form to display. worker.js independently enforces the
+  // first-login restriction, so hiding this form cannot bypass it.
   const mustChange = user && (user.mustChangePassword || changingPassword);
 
+  // Render in order: session loading, password change, signed in, signed out.
   return (
     <div className="App">
       <AppBar position="static"><Toolbar style={{ justifyContent: 'space-between' }}>

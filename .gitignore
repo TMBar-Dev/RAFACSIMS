@@ -1,10 +1,14 @@
+# Generated dependencies, build output and local development state.
 node_modules/
 build/
 dist/
 coverage/
+# Local secrets must never be committed or copied to the public build.
 .env
 .env.*
-!.env.example
+.dev.vars
+.dev.vars.*
+.wrangler/
 .eslintcache
 .DS_Store
 *.log

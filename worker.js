@@ -1,11 +1,19 @@
+// Cloudflare Worker entry point: API requests use D1; other requests serve the
+// generated frontend through ASSETS. Never serve the repository root itself.
 const encoder = new TextEncoder();
+// Keep this compatible with stored PBKDF2 records and the Workers runtime.
 const ITERATIONS = 100000;
 const SESSION_SECONDS = 86400;
+// __Host- cookies require HTTPS, Secure, Path=/ and no Domain attribute.
 const COOKIE = '__Host-rafacsims';
+// Bootstrap record only. INSERT OR IGNORE below preserves an admin password
+// that has already been changed; this hash is not written over existing users.
 const ADMIN_HASH = 'pbkdf2$100000$475004062412af7965037c5326040053$ca2fda7f770b4c51d1b36f487286026209645347a4ef2bfd2a9b4ec29ba199ed';
+// Shared by requests in this Worker isolate, not a replacement for D1 storage.
 let ready;
 
 // CREATE IF NOT EXISTS and INSERT OR IGNORE also make cold-start races safe.
+// Concurrent requests share the initialization promise; a failure permits retry.
 async function initialize(db) {
   if (!ready) ready = db.batch([
     db.prepare(`CREATE TABLE IF NOT EXISTS users (
@@ -34,6 +42,7 @@ async function initialize(db) {
 }
 
 function json(body, status = 200, headers = {}) {
+  // Session and account responses must not be reused by browser/CDN caches.
   return Response.json(body, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
 }
 function fail(message, status = 400) {
@@ -44,6 +53,8 @@ function hex(bytes) {
 }
 function randomToken() { return hex(crypto.getRandomValues(new Uint8Array(32))); }
 async function digest(value) { return hex(await crypto.subtle.digest('SHA-256', encoder.encode(value))); }
+// Stored format: algorithm$iterations$salt$hash. Salt is encoded as UTF-8 text,
+// matching existing records; decoding it as raw hex would change password hashes.
 async function hashPassword(password, salt = randomToken()) {
   const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256',
@@ -55,6 +66,7 @@ async function verifyPassword(password, stored) {
   if (parts.length !== 4 || parts[0] !== 'pbkdf2' || Number(parts[1]) !== ITERATIONS) return false;
   const actual = await hashPassword(password, parts[2]);
   if (actual.length !== stored.length) return false;
+  // Compare the whole equal-length string rather than exit on a first mismatch.
   let difference = 0;
   for (let i = 0; i < actual.length; i++) difference |= actual.charCodeAt(i) ^ stored.charCodeAt(i);
   return difference === 0;
@@ -64,12 +76,15 @@ function validatePassword(password) {
     fail('Choose a password between 12 and 128 characters.');
 }
 function publicUser(user) {
+  // Explicit allowlist: never send password hashes or session records to clients.
   return { username: user.username, role: user.role, mustChangePassword: Boolean(user.must_change_password) };
 }
 function cookie(token, seconds = SESSION_SECONDS) {
   return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${seconds}`;
 }
 async function currentSession(request, db) {
+  // The browser holds the random token; D1 holds only its SHA-256 digest.
+  // Join to the current user row so role/password-change status stays current.
   const token = (request.headers.get('Cookie') || '').split(';').map(v => v.trim())
     .find(v => v.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
@@ -78,6 +93,7 @@ async function currentSession(request, db) {
     .bind(await digest(token), Math.floor(Date.now() / 1000)).first();
 }
 async function issueSession(db, userId) {
+  // Expiry is enforced in D1 lookups as well as by the browser cookie lifetime.
   const token = randomToken();
   await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
     .bind(await digest(token), userId, Math.floor(Date.now() / 1000) + SESSION_SECONDS).run();
@@ -88,12 +104,15 @@ async function api(request, env) {
   const path = new URL(request.url).pathname;
   if (!['GET', 'POST'].includes(request.method)) return json({ message: 'Method not allowed.' }, 405, { Allow: 'GET, POST' });
   if (request.method === 'POST') {
+    // State changes accept only same-origin JSON requests. Browser fetch sets
+    // Origin automatically; scripted clients must supply a matching header.
     if (request.headers.get('Origin') !== new URL(request.url).origin) fail('Request origin rejected.', 403);
     if (!(request.headers.get('Content-Type') || '').startsWith('application/json')) fail('JSON required.', 415);
   }
   if (!env.DB) fail('Database binding DB is not configured.', 503);
   await initialize(env.DB);
   if (request.method === 'GET' && path === '/api/session') {
+    // Signed-out users get null, allowing the frontend to restore state on load.
     const user = await currentSession(request, env.DB);
     return json({ user: user ? publicUser(user) : null });
   }
@@ -117,6 +136,8 @@ async function api(request, env) {
   if (limits[0].results[0].hits > 20) return json({ message: 'Too many requests. Try again in a minute.' }, 429, { 'Retry-After': '60' });
 
   if (path === '/api/register') {
+    // Usernames are unique ignoring case. Role defaults to user in the schema;
+    // no role supplied by a registration request is accepted.
     const username = typeof body.username === 'string' ? body.username.trim() : '';
     if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username)) fail('Username must contain 3–40 letters, numbers, dots, underscores or hyphens.');
     if (username.toLowerCase() === 'admin') fail('That username is reserved.', 409);
@@ -139,6 +160,7 @@ async function api(request, env) {
 
   const user = await currentSession(request, env.DB);
   if (!user) fail('Please log in.', 401);
+  // These maintenance actions remain available during mandatory password reset.
   if (path === '/api/logout') {
     await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(user.token_hash).run();
     return json({ message: 'Logged out.' }, 200, { 'Set-Cookie': cookie('', 0) });
@@ -150,7 +172,8 @@ async function api(request, env) {
     if (body.newPassword === body.currentPassword || body.newPassword === 'RAFACSIMS') fail('Choose a different password.');
     const hash = await hashPassword(body.newPassword);
     const token = randomToken();
-    // Guard against concurrent changes using a stale session/password.
+    // D1 executes this batch transactionally. Guard against concurrent changes
+    // using a stale password, revoke all old sessions and issue one fresh token.
     const results = await env.DB.batch([
       env.DB.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ? AND password_hash = ?')
         .bind(hash, user.id, user.password_hash),
@@ -173,6 +196,8 @@ export default {
     if (!new URL(request.url).pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
     catch (error) {
+      // Expected validation errors are safe to display. Internal SQL/runtime
+      // details stay in Worker logs rather than leaking through API responses.
       if (!error.status) console.error('API error', error);
       return json({ message: error.status ? error.message : 'The service is temporarily unavailable. Please try again.' }, error.status || 503);
     }

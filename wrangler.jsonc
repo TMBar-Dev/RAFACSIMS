@@ -1,14 +1,18 @@
 {
   "$schema": "https://unpkg.com/wrangler/config-schema.json",
   "name": "rafacsims",
-  "main": "../worker/index.js",
+  // Backend entry point, bundled separately from the browser application.
+  "main": "./worker.js",
   "compatibility_date": "2026-11-17",
   "assets": {
+    // Only generated public files are hosted; never change this to ".".
     "directory": "./build",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
+    // API requests must reach worker.js instead of the SPA HTML fallback.
     "run_worker_first": ["/api/*"]
   },
+  // Keep this ID/binding to retain the existing database and changed passwords.
   "d1_databases": [{
     "binding": "DB",
     "database_name": "rafacsims",
