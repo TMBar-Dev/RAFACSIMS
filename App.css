@@ -63,6 +63,9 @@ main { padding: 32px 16px; }
 .password-status { display: inline-block; padding: 4px 8px; border-radius: 4px; background: #e7f3eb; color: #285c3b; font-size: 0.8rem; white-space: nowrap; }
 .password-status.pending { background: #fff2d8; color: #76510e; }
 .pagination-controls { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+/* Separate profile fields from login fields without adding nested page layouts. */
+.form-section-heading.MuiTypography-root { margin-top: 24px; }
+.staff-appointment { display: block; margin-top: 5px; color: #596d80; font-size: 0.8rem; }
 /* Keep captions accessible without showing a second copy above each table. */
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .workspace a:focus-visible, .table-scroll:focus-visible { outline: 3px solid #426b96; outline-offset: 3px; }

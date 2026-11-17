@@ -6,6 +6,7 @@ import '@fontsource/roboto/500.css';
 import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@material-ui/core';
 import { Dashboard, ManagementTemplate, PAGES, pageHref, readPageHash, visiblePages } from './templates.jsx';
 import UserManagement from './users.jsx';
+import StaffAccounts from './staff.jsx';
 
 // The interface and API share an origin. The browser sends the HttpOnly session
 // cookie automatically; JavaScript never needs to read or store its token.
@@ -136,7 +137,7 @@ function App() {
                   </a>
                 ))}
               </nav>
-              <p className="sidebar-note">Cadets, stock and staff profiles are templates. Account management is available to administrators.</p>
+              <p className="sidebar-note">Cadets and stock are templates. Staff and login accounts are managed by administrators.</p>
             </aside>
             <section className="workspace-content" aria-label="Page content">
               {message && <p className="message-banner" role="status" aria-live="polite">{message}</p>}
@@ -148,6 +149,7 @@ function App() {
                 </Card>
               ) : page === 'dashboard' ? <Dashboard user={user} />
                 : page === 'users' ? <UserManagement request={api} currentUser={user} />
+                  : page === 'staff' ? <StaffAccounts request={api} currentUser={user} />
                   : <ManagementTemplate key={page} pageKey={page} />}
             </section>
           </div>

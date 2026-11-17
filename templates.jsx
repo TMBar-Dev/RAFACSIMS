@@ -2,8 +2,8 @@ import React from 'react';
 import { Button, Card, TextField, Typography } from '@material-ui/core';
 
 // One registry keeps navigation, headings and direct hash links consistent.
-// Cadets/Stock/Staff remain templates. User Management is a separate live page
-// backed by the account API and is restricted to administrators.
+// Cadets/Stock remain templates. Staff and User Management have real API-backed
+// directories and are restricted to administrators.
 export const PAGES = {
   dashboard: { title: 'Dashboard', description: 'Your squadron workspace at a glance.' },
   cadets: {
@@ -26,13 +26,9 @@ export const PAGES = {
   },
   staff: {
     title: 'Staff Accounts',
-    description: 'A place for staff profiles, account roles and access settings.',
-    singular: 'staff account',
-    adminOnly: true,
-    columns: ['Name', 'Username', 'Role', 'Account status', 'Last sign-in', 'Actions'],
-    filters: ['All roles', 'All account statuses'],
-    fields: ['Display name', 'Username', 'Role', 'Account status'],
-    summaries: ['Staff accounts', 'Administrators', 'Active accounts']
+    description: 'Create staff profiles with new logins or link existing accounts.',
+    implemented: true,
+    adminOnly: true
   },
   users: {
     title: 'User Management',
@@ -54,7 +50,7 @@ export function pageHref(key) {
 }
 
 // The role check controls links, not data permissions. worker.js independently
-// authorizes user-management requests; future staff APIs must do the same.
+// authorizes both staff and user-management requests using the current session.
 export function visiblePages(user) {
   return Object.entries(PAGES).filter(([, page]) => !page.adminOnly || user.role === 'admin');
 }
@@ -69,7 +65,7 @@ export function Dashboard({ user }) {
       </header>
       <div className="template-notice" role="note">
         <strong>Workspace status</strong>
-        <p>Cadets, Stock Management and Staff Accounts are page templates. Administrators can use User Management to create sign-in accounts.</p>
+        <p>Cadets and Stock Management are page templates. Administrators can manage real staff profiles and login accounts.</p>
       </div>
       <div className="module-grid">
         {visiblePages(user).filter(([key]) => key !== 'dashboard').map(([key, page]) => (

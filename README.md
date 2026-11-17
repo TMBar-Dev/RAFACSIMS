@@ -2,6 +2,27 @@
 
 The React frontend and authentication API deploy together as the `rafacsims` Worker. D1 is accessed through the `DB` binding. No MySQL server or Express process is needed.
 
+## Staff Accounts
+
+Administrators can use `#/staff` to list real staff profiles from the `staff` table and create staff with working sign-in accounts. This page replaces the former Staff Accounts template. Its list supports refresh and Previous/Next navigation, with at most 25 profiles per page.
+
+The creation form provides two account modes:
+
+- **Create a new login:** create a staff profile and a new `users` record together. Supply a unique username, a `user` or `admin` role, and a confirmed temporary password of 12-128 characters. The new account must change its temporary password on first login.
+- **Use an existing login:** create a staff profile linked to an existing username. The existing account's password, role and password-change requirement are preserved. A login can belong to only one staff profile.
+
+First and last names are required. A service number, rank, appointment, email address and phone number are optional. Service numbers, when supplied, must be unique. Duplicate usernames, service numbers or account links are rejected. New-login creation is transactional, so a failed staff insert does not leave an orphaned sign-in account.
+
+Initialization creates a missing staff profile for the existing `admin` account, using the placeholder name **System Administrator**. It links the existing account rather than recreating it: changed passwords and any existing linked staff profile remain untouched. This does not backfill every user as staff. Accounts created through User Management or public registration can be linked explicitly using the existing-login mode.
+
+Staff profile status and appointment do not change sign-in permissions; account roles remain in `users`. Existing unlinked profiles can be listed with no linked account. Editing or deleting profiles, editing existing account roles and resetting existing passwords are not part of this feature.
+
+### Staff Accounts change review: 17 November 2026
+
+The full isolated test run passed all 15 tests with zero failures. It covers administrator and first-login gates, inclusion of the existing admin, preservation of changed admin passwords and profile details across reinitialization, existing-login credential preservation, atomic creation/rollback, duplicate validation, safe pagination and the existing account/schema regressions. The staff page uses the existing request helper and remains behind the session, password-change and administrator gates. Cadets remains a template until the staff workflow has been tested in the browser.
+
+`npm test` includes `staff-api.test.mjs` alongside the other root `*.test.mjs` suites. The recorded full run used `node --test --test-isolation=none users-api.test.mjs schema.test.mjs staff-api.test.mjs`. These tests use isolated SQLite storage and do not modify live D1 records. No local frontend build or browser verification has been performed. After deployment, verify the admin profile, both staff-creation modes, first-login password replacement and the existing account flows in the browser.
+
 ## Management database schema
 
 `schema.js` defines four management tables alongside the existing authentication tables. After this version is deployed, the next API request runs the Worker's idempotent initialization and creates any missing tables. Preparing or pushing this code does not write to the remote database. The existing D1 database ID, users, sessions and account passwords are preserved; no existing-account import or password reset is required.
@@ -22,9 +43,11 @@ Relationships and initial assumptions:
 - Timestamps are Unix seconds. `updated_at` receives an initial value when a record is created; future write handlers must update it explicitly. There is no automatic timestamp-update trigger.
 - Creating or changing an order does not automatically change stock quantities. That workflow has not been implemented.
 
-This change provides the data schema only. Cadets, Stock Management and Staff Accounts remain frontend templates, and there are no management-record create/read/update/delete endpoints or working record-entry controls yet. User Management remains the separate working account feature. `CREATE TABLE IF NOT EXISTS` initializes missing tables; it is not a general migration mechanism for altering an existing table's columns.
+The initial schema change provided table definitions only. Staff Accounts now lists and creates staff profiles linked to logins as described above. Cadets and Stock Management remain frontend templates, and there are no cadet, stock or order management endpoints yet. User Management remains a separate account-only feature. `CREATE TABLE IF NOT EXISTS` initializes missing tables; it is not a general migration mechanism for altering an existing table's columns.
 
 ### Schema change review: 17 November 2026
+
+This historical review covers the initial table definitions, before the later Staff Accounts API/page connection.
 
 Static review completed with no blocking findings. All eight isolated tests passed with zero failures, covering additive/idempotent table setup, record/password preservation, relationships and deletion behavior, quantity/status validation, no automatic stock changes, and the existing account API regressions.
 
@@ -40,11 +63,11 @@ After signing in and completing any required password change, the application pr
 | User Management | `#/users` | Working administrator-only account list and account creation, backed by the existing D1 users table. |
 | Cadets | `#/cadets` | Cadet register layout, proposed columns and empty-state guidance. |
 | Stock Management | `#/stock` | Stock register layout, proposed columns and empty-state guidance. |
-| Staff Accounts | `#/staff` | Staff register layout for administrators, with no staff data connected. |
+| Staff Accounts | `#/staff` | Working administrator-only staff directory and profile creation with new or existing sign-in accounts. |
 
-Dashboard, Cadets, Stock Management and Staff Accounts are page templates while the original application code is being located. Their displayed record tables are intentionally empty and are not connected to the management database tables described above. Record-entry, search, import and export controls shown in those templates are disabled; they do not save management records or pretend an operation succeeded. There are no cadet, stock, staff-profile or order management endpoints yet. User Management is a separate working feature, not an empty register template.
+Dashboard provides navigation to working account pages and the remaining templates. Cadets and Stock Management are page templates while the original application code is being located. Their displayed record tables are intentionally empty and are not connected to their database tables. Record-entry, search, import and export controls shown in those templates are disabled; they do not save management records or pretend an operation succeeded. There are no cadet, stock or order management endpoints yet. Staff Accounts and User Management are working features, not empty register templates.
 
-The Staff Accounts navigation item and template are restricted to the administrator view. This frontend visibility rule is not an authorization boundary. Any future staff-profile API must enforce its own server-side administrator checks before real records are connected. The working User Management API already checks administrator permission and completed mandatory password changes on the server.
+Staff Accounts and User Management navigation are restricted to the administrator view. This frontend visibility rule is not an authorization boundary: both APIs independently require a live administrator session and completion of any mandatory password change before they return records or create accounts.
 
 Existing registration, sign-in, session restoration, logout and password-change flows remain the account foundation. Management templates mount only after an authenticated session is restored or established and the account no longer requires its initial password to be changed. The optional password-change form remains available from the signed-in interface.
 
@@ -54,9 +77,11 @@ Administrators can open `#/users` to list real accounts, refresh the list, move 
 
 Account creation requires a unique username of 3–40 letters, numbers, dots, underscores or hyphens, a role of `user` or `admin`, and a temporary password of 12–128 characters entered twice. Every account created this way must change that temporary password on its first login. Existing account passwords are not reset. Editing roles, deleting accounts and resetting existing passwords are not implemented by this feature.
 
-Staff Accounts remains a separate staff-profile template; account creation does not create a staff-profile record. Existing public registration remains available and creates ordinary users only.
+Creating an account through User Management does not create a staff-profile record. Use Staff Accounts to create a profile with a new login or to link an existing username. Existing public registration remains available and creates ordinary users only.
 
 ### Page and User Management change review: 17 November 2026
+
+This historical review covers the template/User Management work before the later Staff Accounts connection.
 
 This change adds navigation, four clearly labelled templates and live administrator-only user listing/creation. Existing registration, login, session restoration, logout and password-change flows must retain their current contracts. User Management reuses the existing users table; no database replacement, account import or existing-password reset is required.
 
@@ -125,7 +150,7 @@ Before marking this layout verified in production:
 
 Remove any previous `--assets` command-line argument: wrangler.jsonc configures both the Worker API and assets. The build identity must have permission to deploy Workers and bind the specified D1 database. The database name in the config assumes `rafacsims`; adjust it if you chose another name. The database ID is already configured.
 
-The first API request after deployment creates any missing authentication and management tables and inserts admin only if the account does not already exist. No manual SQL or separate migration command is required for these initial table definitions. D1 must already exist; this code does not create the Cloudflare database resource.
+The first API request after deployment creates any missing authentication and management tables, inserts admin only if the account does not already exist, and links a missing System Administrator staff profile to that account. Existing admin passwords and linked staff profiles are preserved. No manual SQL or separate migration command is required for these initial table definitions. D1 must already exist; this code does not create the Cloudflare database resource.
 
 ## First sign-in
 
@@ -136,7 +161,7 @@ Sign in immediately after deployment and replace the initial password. The API r
 
 Public registration creates ordinary users, never administrators. Sessions use random tokens, stored hashed in D1, in Secure/HttpOnly/SameSite cookies with a 24-hour expiry. Password changes invalidate all prior sessions and issue a fresh token. API responses return only explicitly allowed account fields; password hashes and session tokens are never returned in response bodies.
 
-Authentication and administrator account listing/creation are implemented. Cadet, stock and staff-profile pages remain frontend templates. Their database schema, plus orders, is defined in schema.js, but record-management APIs and page connections have not yet been implemented. No existing MySQL account export was available, so existing accounts are not imported.
+Authentication, administrator account management and staff profile listing/creation are implemented. Cadet and stock pages remain frontend templates. Their database schema, plus orders, is defined in schema.js, but their record-management APIs and page connections have not yet been implemented. No existing MySQL account export was available, so existing accounts are not imported.
 
 ## API
 
@@ -147,8 +172,10 @@ Authentication and administrator account listing/creation are implemented. Cadet
 - POST /api/logout
 - GET /api/users?after=0: administrator-only list of up to 25 accounts. `after` is a nonnegative ID cursor. Returns `users` with `id`, `username`, `role`, `mustChangePassword` and `createdAt`, plus `nextCursor` or null.
 - POST /api/users: administrator-only creation with `username`, `password` and `role`; the created account must change its password on first login.
+- GET /api/staff?after=0: administrator-only list of up to 25 profiles ordered by staff ID. Returns `staff` and `nextCursor` or null. Profile fields are `id`, `userId`, `serviceNumber`, `firstName`, `lastName`, `rank`, `appointment`, `email`, `phone`, `status`, `createdAt` and `updatedAt`. Its `account` is null or contains only `id`, `username`, `role` and `mustChangePassword`.
+- POST /api/staff: administrator-only profile creation with `accountMode` of `create` or `existing`, `username`, `firstName`, `lastName`, and optional `serviceNumber`, `rank`, `appointment`, `email` and `phone`. New-login mode also requires `password` and `role`. Existing-login mode preserves the account's credentials and role. Creation returns a message without credentials or password hashes.
 
-Both User Management endpoints require an authenticated administrator who has completed any mandatory password change. The existing same-origin JSON checks and write-request rate limit also apply to account creation.
+Both Staff Accounts endpoints and both User Management endpoints require an authenticated administrator who has completed any mandatory password change. The existing same-origin JSON checks and write-request rate limit also apply to account/profile creation.
 
 JSON POST requests must include a matching Origin header (automatically sent by the browser). All API responses are private/no-store. Password hashing uses Workers Web Crypto PBKDF2 with 100,000 iterations for runtime compatibility. Authentication requests are rate limited by source IP using D1. Expired rate-limit buckets and sessions are removed opportunistically.
 
@@ -157,12 +184,14 @@ The unused Express/MySQL backend and its duplicate dependency manifests have bee
 ## Files
 
 - main.jsx and App.css: React interface and styling.
-- templates.jsx: Dashboard and reusable Cadets, Stock Management and Staff Accounts page templates.
+- templates.jsx: Dashboard, navigation definitions and reusable Cadets/Stock Management page templates.
 - users.jsx: live administrator account listing, pagination and account creation.
+- staff.jsx: live staff profile listing and creation with new or existing login accounts.
 - worker.js: authentication API, sessions and D1 table setup.
 - schema.js: management table definitions, constraints and relationships used during Worker initialization.
 - schema.test.mjs: isolated SQLite tests for the management schema; no live D1 writes.
 - users-api.test.mjs: isolated SQLite-backed API checks, invoked with npm test; not a live D1 or frontend/browser test.
+- staff-api.test.mjs: isolated checks for staff permissions, account linking/creation and admin-profile preservation; not a live D1 or frontend/browser test.
 - index.html: HTML template used by build.mjs.
 - bg.jpg, favicon.ico, manifest.json and robots.txt: public assets.
 - build.mjs: builds the frontend into build/ and copies only the explicitly listed public files.

@@ -36,12 +36,18 @@ async function initialize(db) {
     db.prepare(`CREATE TABLE IF NOT EXISTS rate_limits (
       bucket TEXT PRIMARY KEY, hits INTEGER NOT NULL, expires_at INTEGER NOT NULL
     )`),
-    // Add the empty management tables without changing existing authentication
-    // records. Their page templates remain disconnected until APIs are added.
+    // Add the management tables without changing existing authentication
+    // records. Staff profiles can link to accounts through user_id.
     ...MANAGEMENT_SCHEMA.map(statement => db.prepare(statement)),
     db.prepare(`INSERT OR IGNORE INTO users
       (username, password_hash, role, must_change_password) VALUES ('admin', ?, 'admin', 1)`)
-      .bind(ADMIN_HASH)
+      .bind(ADMIN_HASH),
+    // Include the existing bootstrap administrator in the staff directory. This
+    // only inserts a missing profile: its password, role and existing profile
+    // details are never replaced on deployment or a Worker cold start.
+    db.prepare(`INSERT OR IGNORE INTO staff (user_id, first_name, last_name, appointment)
+      SELECT id, 'System', 'Administrator', 'Administrator'
+      FROM users WHERE username = 'admin' AND role = 'admin'`)
   ]).catch(error => { ready = undefined; throw error; });
   await ready;
 }
@@ -83,6 +89,25 @@ function validatePassword(password) {
 function publicUser(user) {
   // Explicit allowlist: never send password hashes or session records to clients.
   return { username: user.username, role: user.role, mustChangePassword: Boolean(user.must_change_password) };
+}
+function publicStaff(row) {
+  // The joined query selects no password/token columns. Keep this explicit
+  // public shape stable even if additional private staff fields are added later.
+  return {
+    id: row.id, userId: row.user_id, serviceNumber: row.service_number,
+    firstName: row.first_name, lastName: row.last_name, rank: row.rank,
+    appointment: row.appointment, email: row.email, phone: row.phone,
+    status: row.status, createdAt: row.created_at, updatedAt: row.updated_at,
+    account: row.account_id === null ? null : { id: row.account_id, ...publicUser(row) }
+  };
+}
+function staffText(body, key, label, maximum, required = false) {
+  if (body[key] === undefined && !required) return '';
+  if (typeof body[key] !== 'string') fail(`${label} must be text.`);
+  const value = body[key].trim();
+  if ((required && !value) || value.length > maximum)
+    fail(`${label} must contain ${required ? '1' : '0'}-${maximum} characters.`);
+  return value;
 }
 function requireAdministrator(user) {
   // Use the current D1 user row from the session lookup, never a browser-supplied
@@ -144,6 +169,20 @@ async function api(request, env) {
     // Only the explicitly selected public fields leave the Worker. Password
     // hashes and session tokens are neither queried nor exposed by this endpoint.
     return json({ users, nextCursor: result.results.length > 25 ? users[users.length - 1].id : null });
+  }
+  if (request.method === 'GET' && path === '/api/staff') {
+    requireAdministrator(await currentSession(request, env.DB));
+    const cursor = new URL(request.url).searchParams.get('after') ?? '0';
+    if (!/^\d{1,16}$/.test(cursor) || !Number.isSafeInteger(Number(cursor))) fail('Invalid staff-list cursor.');
+    // LEFT JOIN retains existing profiles without a login. Authorization uses
+    // the requesting administrator's current session, never a listed role.
+    const result = await env.DB.prepare(`SELECT s.id, s.user_id, s.service_number,
+      s.first_name, s.last_name, s.rank, s.appointment, s.email, s.phone, s.status,
+      s.created_at, s.updated_at, u.id AS account_id, u.username, u.role, u.must_change_password
+      FROM staff s LEFT JOIN users u ON u.id = s.user_id
+      WHERE s.id > ? ORDER BY s.id ASC LIMIT 26`).bind(Number(cursor)).all();
+    const staff = result.results.slice(0, 25).map(publicStaff);
+    return json({ staff, nextCursor: result.results.length > 25 ? staff[staff.length - 1].id : null });
   }
   if (request.method !== 'POST') return json({ message: 'Not found.' }, 404);
   if (Number(request.headers.get('Content-Length')) > 4096) fail('Request too large.', 413);
@@ -217,6 +256,64 @@ async function api(request, env) {
   }
   // All future protected endpoints must sit behind this gate.
   if (user.must_change_password) fail('Change your password before continuing.', 403);
+  if (path === '/api/staff') {
+    requireAdministrator(user);
+    if (!['create', 'existing'].includes(body.accountMode)) fail('Choose whether to create or link a login.');
+    const username = typeof body.username === 'string' ? body.username.trim() : '';
+    if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username)) fail('Username must contain 3-40 letters, numbers, dots, underscores or hyphens.');
+    const serviceNumber = body.serviceNumber == null ? null
+      : staffText(body, 'serviceNumber', 'Service number', 40) || null;
+    const profile = [
+      serviceNumber,
+      staffText(body, 'firstName', 'First name', 100, true),
+      staffText(body, 'lastName', 'Last name', 100, true),
+      staffText(body, 'rank', 'Rank', 80),
+      staffText(body, 'appointment', 'Appointment', 120),
+      staffText(body, 'email', 'Email', 254),
+      staffText(body, 'phone', 'Phone', 40)
+    ];
+    let existing;
+    let passwordHash;
+    if (body.accountMode === 'create') {
+      if (username.toLowerCase() === 'admin') fail('That username is reserved.', 409);
+      if (!['user', 'admin'].includes(body.role)) fail('Choose a valid account role.');
+      validatePassword(body.password);
+      passwordHash = await hashPassword(body.password);
+    } else {
+      existing = await env.DB.prepare('SELECT id FROM users WHERE username = ?').bind(username).first();
+      if (!existing) fail('No user account matches that username.', 404);
+    }
+    try {
+      if (body.accountMode === 'create') {
+        // A plain INSERT plus one D1 batch makes profile/account creation atomic.
+        // If either unique key conflicts, the new login is rolled back as well.
+        // Select its ID by unique username instead of relying on connection-local
+        // last_insert_rowid() state across separate D1 statements.
+        await env.DB.batch([
+          env.DB.prepare(`INSERT INTO users (username, password_hash, role, must_change_password)
+            VALUES (?, ?, ?, 1)`).bind(username, passwordHash, body.role),
+          env.DB.prepare(`INSERT INTO staff
+            (user_id, service_number, first_name, last_name, rank, appointment, email, phone)
+            SELECT id, ?, ?, ?, ?, ?, ?, ? FROM users WHERE username = ?`)
+            .bind(...profile, username)
+        ]);
+      } else {
+        // Linking an existing account never changes its password, role or reset
+        // flag. The UNIQUE user_id constraint prevents duplicate staff links.
+        await env.DB.prepare(`INSERT INTO staff
+          (user_id, service_number, first_name, last_name, rank, appointment, email, phone)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(existing.id, ...profile).run();
+      }
+    } catch (error) {
+      const details = [error.message, error.cause?.message].filter(Boolean).join(' ');
+      if (/UNIQUE constraint failed:\s*(?:users\.username|staff\.(?:user_id|service_number))/i.test(details))
+        fail('That username or service number already exists, or the login already has a staff profile.', 409);
+      throw error;
+    }
+    return json({ message: body.accountMode === 'create'
+      ? 'Staff account created. The user must change their temporary password on first login.'
+      : 'Staff profile created and linked to the existing login. Its password and permissions are unchanged.' }, 201);
+  }
   if (path === '/api/users') {
     requireAdministrator(user);
     // Account creation shares the existing JSON/origin/body/rate-limit guards.
