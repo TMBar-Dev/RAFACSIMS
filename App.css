@@ -75,16 +75,17 @@ main { padding: 32px 16px; }
 .order-line-picker { margin: 18px 0; }
 .order-remarks.MuiTextField-root { margin-top: 20px; }
 .order-notes p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.inventory-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 
 @media print {
-  .orders-page { background: white; }
-  .orders-page .MuiAppBar-root, .orders-page .workspace-sidebar, .orders-page .screen-only { display: none; }
-  .orders-page .workspace { padding: 0; background: white; min-height: 0; color: black; }
-  .orders-page .workspace-shell { display: block; }
-  .orders-page .workspace-content > :not(.purchase-print) { display: none; }
-  .orders-page .purchase-print { border: 0; padding: 0; overflow: visible; }
-  .orders-page .table-scroll { overflow: visible; }
-  .orders-page .records-table tr { break-inside: avoid; }
+  .print-record-page { background: white; }
+  .print-record-page .MuiAppBar-root, .print-record-page .workspace-sidebar, .print-record-page .screen-only { display: none; }
+  .print-record-page .workspace { padding: 0; background: white; min-height: 0; color: black; }
+  .print-record-page .workspace-shell { display: block; }
+  .print-record-page .workspace-content > :not(.purchase-print) { display: none; }
+  .print-record-page .purchase-print { border: 0; padding: 0; overflow: visible; }
+  .print-record-page .table-scroll { overflow: visible; }
+  .print-record-page .records-table tr { break-inside: avoid; }
 }
 
 @media (max-width: 1050px) {
@@ -99,6 +100,6 @@ main { padding: 32px 16px; }
   .workspace-sidebar nav a { padding: 10px 12px; }
   .workspace-sidebar .eyebrow, .sidebar-note { display: none; }
   .workspace-card, .module-card { padding: 18px; }
-  .summary-grid, .detail-grid, .template-filters { grid-template-columns: minmax(0, 1fr); }
+  .summary-grid, .detail-grid, .template-filters, .inventory-summary { grid-template-columns: minmax(0, 1fr); }
   .signed-in-name { display: none; }
 }

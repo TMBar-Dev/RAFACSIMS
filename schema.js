@@ -1,4 +1,6 @@
-// Additive D1/SQLite schema for the future management pages. Statements run in
+import { INVENTORY_SCHEMA } from './inventory-schema.js';
+
+// Additive D1/SQLite schema for the management pages. Statements run in
 // order after the existing users table is created. Repeated initialization does
 // not drop tables, overwrite records or reset account passwords.
 // CREATE IF NOT EXISTS is not a migration: later column changes need a separate
@@ -126,8 +128,9 @@ export const MANAGEMENT_SCHEMA = [
   )`,
   'CREATE INDEX IF NOT EXISTS purchase_orders_status ON purchase_orders(status)',
   'CREATE INDEX IF NOT EXISTS purchase_orders_supplier ON purchase_orders(supplier_id)',
-  'CREATE INDEX IF NOT EXISTS purchase_order_lines_variant ON purchase_order_lines(variant_id)'
+  'CREATE INDEX IF NOT EXISTS purchase_order_lines_variant ON purchase_order_lines(variant_id)',
+  ...INVENTORY_SCHEMA
 ];
 
-// updated_at is initialized on insert. Future write endpoints must update it
-// explicitly; automatic timestamp/inventory triggers are intentionally absent.
+// Write handlers update timestamps explicitly. The stock-movement trigger
+// validates balances at insert time, leaving posting and status changes to the batch.

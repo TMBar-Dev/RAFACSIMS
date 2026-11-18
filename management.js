@@ -3,10 +3,10 @@ export function fail(message, status = 400) {
 }
 
 const PAGE_SIZE = 25;
-const MAX_LINES = 50;
-const MAX_QUANTITY = 1_000_000;
+export const MAX_LINES = 50;
+export const MAX_QUANTITY = 1_000_000;
 
-function text(value, label, max, required = false) {
+export function text(value, label, max, required = false) {
   if (typeof value !== 'string') fail(`${label} must be text.`);
   const trimmed = value.trim();
   if (trimmed.length > max || (required && !trimmed))
@@ -19,7 +19,7 @@ function choice(value, label, allowed) {
   return value;
 }
 
-function integer(value, label, max = Number.MAX_SAFE_INTEGER) {
+export function integer(value, label, max = Number.MAX_SAFE_INTEGER) {
   if (!Number.isSafeInteger(value) || value < 1 || value > max)
     fail(`${label} must be a whole number between 1 and ${max}.`);
   return value;
@@ -83,9 +83,11 @@ const REGISTERS = {
   },
   variants: {
     table: 'catalog_variants',
-    fields: 'r.id, r.item_id, r.size, r.status, i.name AS item_name, i.uniform_type',
-    from: 'JOIN catalog_items i ON i.id = r.item_id JOIN suppliers s ON s.id = i.supplier_id',
+    fields: 'r.id, r.item_id, r.size, r.status, i.name AS item_name, i.uniform_type, coalesce(balance.quantity, 0) AS available',
+    from: `JOIN catalog_items i ON i.id = r.item_id JOIN suppliers s ON s.id = i.supplier_id
+      LEFT JOIN variant_stock_balances balance ON balance.variant_id = r.id`,
     active: "i.status = 'active' AND s.status = 'active'",
+    inStock: 'balance.quantity > 0',
     filters: { supplierId: 'i.supplier_id', itemId: 'r.item_id' },
     search: "i.name || ' ' || r.size || ' ' || i.uniform_type",
     values: (body, id) => ({
@@ -103,7 +105,7 @@ export function managementRoute(path) {
   return { resource: match[1], detail: match[2] };
 }
 
-function queryPage(url) {
+export function queryPage(url) {
   const cursor = url.searchParams.get('after');
   return {
     after: cursor === null ? null : integer(Number(cursor), 'Page cursor'),
@@ -111,12 +113,12 @@ function queryPage(url) {
   };
 }
 
-function pageRows(rows) {
+export function pageRows(rows) {
   const records = rows.slice(0, PAGE_SIZE);
   return { records, nextCursor: rows.length > PAGE_SIZE ? records.at(-1).id : null };
 }
 
-function constraintError(error) {
+export function constraintError(error) {
   return [error.message, error.cause?.message].filter(Boolean).join(' ');
 }
 
@@ -128,6 +130,7 @@ async function readRegister(db, config, id, url, activeOnly) {
     where.push("r.status = 'active'");
     if (config.active) where.push(config.active);
   }
+  if (config.inStock && url.searchParams.get('inStock') === '1') where.push(config.inStock);
   if (id) {
     const record = await db.prepare(`SELECT ${config.fields} ${from}
       WHERE ${[...where, 'r.id = ?'].join(' AND ')}`).bind(id).first();
@@ -174,17 +177,29 @@ async function writeRegister(db, resource, id, body) {
   }
 }
 
-const ORDER_FIELDS = 'id, code, supplier_id, supplier_name, status, notes, created_at, updated_at, version';
+const ORDER_FIELDS = `id, code, supplier_id, supplier_name,
+  CASE WHEN EXISTS (SELECT 1 FROM purchase_order_cancellations WHERE order_id = purchase_orders.id)
+    THEN 'cancelled' ELSE status END AS status, notes, created_at, updated_at, version`;
+// Even after reversing a receipt, keep the lines that its audit record points to.
+const ORDER_UNPOSTED = `NOT EXISTS (SELECT 1 FROM inventory_transactions WHERE order_id = purchase_orders.id)
+  AND NOT EXISTS (SELECT 1 FROM purchase_order_cancellations WHERE order_id = purchase_orders.id)`;
 
 async function readOrders(db, detail, url) {
   if (detail === 'summary') {
-    return db.prepare("SELECT count(*) AS pending FROM purchase_orders WHERE status IN ('pending', 'partial')").first();
+    return db.prepare(`SELECT count(*) AS pending FROM purchase_orders o
+      WHERE o.status IN ('pending', 'partial') AND NOT EXISTS (
+        SELECT 1 FROM purchase_order_cancellations c WHERE c.order_id = o.id
+      )`).first();
   }
   if (detail) {
     const id = integer(Number(detail), 'Order ID');
     const [header, lines] = await db.batch([
-      db.prepare(`SELECT ${ORDER_FIELDS} FROM purchase_orders WHERE id = ?`).bind(id),
-      db.prepare(`SELECT id, variant_id, item_name, size, quantity FROM purchase_order_lines
+      db.prepare(`SELECT ${ORDER_FIELDS}, (status = 'pending' AND ${ORDER_UNPOSTED}) AS editable,
+        (SELECT id FROM back_orders WHERE order_id = purchase_orders.id) AS back_order_id,
+        (SELECT reason FROM purchase_order_cancellations WHERE order_id = purchase_orders.id) AS cancellation_reason,
+        (SELECT actor_name FROM purchase_order_cancellations WHERE order_id = purchase_orders.id) AS cancelled_by
+        FROM purchase_orders WHERE id = ?`).bind(id),
+      db.prepare(`SELECT id, variant_id, item_name, size, quantity, received, remaining FROM purchase_line_balances
         WHERE order_id = ? ORDER BY id`).bind(id)
     ]);
     if (!header.results[0]) fail('Purchase order not found.', 404);
@@ -223,7 +238,7 @@ async function writeOrder(db, id, body, userId) {
   }
   const header = id
     ? db.prepare(`UPDATE purchase_orders SET notes = ?, updated_at = unixepoch(), version = version + 1, write_token = ?
-        WHERE id = ? AND status = 'pending' AND version = ? RETURNING id, code`)
+        WHERE id = ? AND status = 'pending' AND version = ? AND ${ORDER_UNPOSTED} RETURNING id, code`)
         .bind(notes, token, id, integer(body.version, 'Order version'))
     : db.prepare(`INSERT INTO purchase_orders (supplier_id, supplier_name, notes, created_by, creation_key, write_token)
         SELECT id, name, ?, ?, ?, ? FROM suppliers WHERE id = ? AND status = 'active'

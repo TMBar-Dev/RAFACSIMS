@@ -4,11 +4,17 @@ import './App.css';
 import '@fontsource/roboto/400.css';
 import '@fontsource/roboto/500.css';
 import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@material-ui/core';
-import { Dashboard, ManagementTemplate, PAGES, canViewPage, pageHref, readPageHash, visiblePages } from './templates.jsx';
+import { Dashboard, PAGES, canViewPage, pageHref, readPageHash, visiblePages } from './templates.jsx';
 import UserManagement from './users.jsx';
 import StaffAccounts from './staff.jsx';
 import RegisterPage from './registers.jsx';
 import PurchaseOrders from './purchase-orders.jsx';
+import TransactionsPage from './inventory-transactions.jsx';
+import { BackOrders, CadetKit, StockPage } from './inventory-pages.jsx';
+import { queryId } from './inventory-ui.jsx';
+
+const transactionPages = ['receipts', 'issues', 'supplier-returns'];
+const printPages = ['orders', 'back-orders', ...transactionPages];
 
 // The interface and API share an origin. The browser sends the HttpOnly session
 // cookie automatically; JavaScript never needs to read or store its token.
@@ -37,13 +43,14 @@ function App() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
-  const [page, setPage] = useState(() => readPageHash());
+  const [hash, setHash] = useState(() => window.location.hash);
+  const page = readPageHash(hash);
 
   // Navigation is independent from authentication. A direct link cannot skip
   // the session-loading or mandatory password-change gates in the render below.
   useEffect(() => {
     const handleNavigation = () => {
-      setPage(readPageHash());
+      setHash(window.location.hash);
       setMessage('');
     };
     window.addEventListener('hashchange', handleNavigation);
@@ -132,11 +139,28 @@ function App() {
   const accessHeading = currentPage.adminOnly
     ? 'Administrator access required'
     : access?.error ? 'Workspace access unavailable' : 'Staff access required';
+  const query = new URLSearchParams(hash.split('?')[1]);
+
+  function workspacePage() {
+    const canCorrect = user.role === 'admin';
+    switch (page) {
+      case 'dashboard': return <Dashboard user={user} canOperate={canOperate} request={api} />;
+      case 'users': return <UserManagement request={api} currentUser={user} />;
+      case 'staff': return <StaffAccounts request={api} currentUser={user} />;
+      case 'orders': return <PurchaseOrders key={hash} request={api} initialId={queryId(query, 'id')} canCorrect={canCorrect} />;
+      case 'stock': return <StockPage key={hash} request={api} query={query} canCorrect={canCorrect} />;
+      case 'back-orders': return <BackOrders key={hash} request={api} query={query} />;
+      case 'cadet-kit': return <CadetKit key={hash} request={api} query={query} />;
+      default: return transactionPages.includes(page)
+        ? <TransactionsPage key={hash} request={api} page={page} query={query} canCorrect={canCorrect} />
+        : <RegisterPage key={page} request={api} resource={page} canEdit={canCorrect} />;
+    }
+  }
 
   // Account forms keep their original handlers. Only the old signed-in welcome
   // panel is expanded into a navigable workspace; protected pages mount last.
   return (
-    <div className={showWorkspace && page === 'orders' ? 'App orders-page' : 'App'}>
+    <div className={showWorkspace && printPages.includes(page) ? 'App print-record-page' : 'App'}>
       <AppBar position="static"><Toolbar className="app-toolbar">
         <Typography variant="h6">RAFACSIMS</Typography>
         {user && <div className="account-controls">
@@ -170,12 +194,7 @@ function App() {
                   {currentPage.operational && !access?.error && <p>Ask an administrator to link your login to Staff Accounts.</p>}
                   <Button component="a" href={pageHref('dashboard')} color="primary">Return to Dashboard</Button>
                 </Card>
-              ) : page === 'dashboard' ? <Dashboard user={user} canOperate={canOperate} request={api} />
-                : page === 'users' ? <UserManagement request={api} currentUser={user} />
-                  : page === 'staff' ? <StaffAccounts request={api} currentUser={user} />
-                    : page === 'orders' ? <PurchaseOrders request={api} />
-                      : page === 'stock' ? <ManagementTemplate pageKey={page} />
-                        : <RegisterPage key={page} request={api} resource={page} canEdit={user.role === 'admin'} />}
+              ) : workspacePage()}
             </section>
           </div>
         ) : (

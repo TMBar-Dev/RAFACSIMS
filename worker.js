@@ -2,6 +2,7 @@
 // generated frontend through ASSETS. Never serve the repository root itself.
 import { MANAGEMENT_SCHEMA } from './schema.js';
 import { fail, managementRoute, readManagement, writeManagement } from './management.js';
+import { inventoryRoute, readInventory, writeInventory } from './inventory.js';
 
 const encoder = new TextEncoder();
 // Keep this compatible with stored PBKDF2 records and the Workers runtime.
@@ -139,6 +140,7 @@ async function api(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
   const management = managementRoute(path);
+  const inventory = inventoryRoute(path);
   if (!['GET', 'POST'].includes(request.method)) return json({ message: 'Method not allowed.' }, 405, { Allow: 'GET, POST' });
   if (request.method === 'POST') {
     // State changes accept only same-origin JSON requests. Browser fetch sets
@@ -161,6 +163,12 @@ async function api(request, env) {
     const user = await currentSession(request, env.DB);
     await requireOperationalAccess(user, env.DB);
     return json(await readManagement(env.DB, management, url, user));
+  }
+  if (request.method === 'GET' && inventory) {
+    const user = await currentSession(request, env.DB);
+    if (inventory.resource === 'opening-balances') requireAdministrator(user);
+    else await requireOperationalAccess(user, env.DB);
+    return json(await readInventory(env.DB, inventory, url));
   }
   if (request.method === 'GET' && path === '/api/users') {
     requireAdministrator(await currentSession(request, env.DB));
@@ -192,7 +200,7 @@ async function api(request, env) {
     return json({ staff, nextCursor: result.results.length > 25 ? staff[staff.length - 1].id : null });
   }
   if (request.method !== 'POST') return json({ message: 'Not found.' }, 404);
-  const bodyLimit = management ? 16384 : 4096;
+  const bodyLimit = management || inventory ? 16384 : 4096;
   if (Number(request.headers.get('Content-Length')) > bodyLimit) fail('Request too large.', 413);
   const text = await request.text();
   if (text.length > bodyLimit) fail('Request too large.', 413);
@@ -204,7 +212,7 @@ async function api(request, env) {
   // consumes the existing sign-in and account maintenance budget.
   const now = Math.floor(Date.now() / 1000);
   const rateKey = `${request.headers.get('CF-Connecting-IP') || 'local'}:${Math.floor(now / 60)}`;
-  const bucket = await digest(management ? `management:${rateKey}` : rateKey);
+  const bucket = await digest(management || inventory ? `management:${rateKey}` : rateKey);
   const limits = await env.DB.batch([
     env.DB.prepare(`INSERT INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, ?)
       ON CONFLICT(bucket) DO UPDATE SET hits = hits + 1 RETURNING hits`).bind(bucket, now + 120),
@@ -266,6 +274,11 @@ async function api(request, env) {
   }
   // All future protected endpoints must sit behind this gate.
   if (user.must_change_password) fail('Change your password before continuing.', 403);
+  if (inventory) {
+    if (inventory.action || inventory.resource === 'opening-balances') requireAdministrator(user);
+    else await requireOperationalAccess(user, env.DB);
+    return json(await writeInventory(env.DB, inventory, body, user), inventory.action === 'cancel' ? 200 : 201);
+  }
   if (management) {
     if (management.detail === 'summary') return json({ message: 'Method not allowed.' }, 405, { Allow: 'GET' });
     if (management.resource === 'purchase-orders') await requireOperationalAccess(user, env.DB);

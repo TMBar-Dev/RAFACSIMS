@@ -1,14 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button, Card, TextField, Typography } from '@material-ui/core';
 import { RecordPager, RecordPicker, RecordSearch, useRecords, useResource } from './management-ui.jsx';
+import { CorrectionForm, formatDate, InventoryLink, PrintRecord } from './inventory-ui.jsx';
 
 const ENDPOINT = 'purchase-orders';
 const MAX_LINES = 50;
 const MAX_QUANTITY = 1_000_000;
-const statuses = { pending: 'Pending', partial: 'Partially received', received: 'Received' };
-const dateFormat = new Intl.DateTimeFormat('en-GB', {
-  dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/London'
-});
+const statuses = { pending: 'Pending', partial: 'Partially received', received: 'Received', cancelled: 'Cancelled' };
 
 function OrderEditor({ request, record, onSave, onCancel }) {
   const [supplier, setSupplier] = useState(record ? { id: record.supplier_id, name: record.supplier_name } : null);
@@ -107,8 +105,9 @@ function OrderLines({ lines, onChange }) {
   return (
     <div className="table-scroll" role="region" aria-label="Order lines" tabIndex={0}>
       <table className="records-table">
-        <thead><tr><th scope="col">Item</th><th scope="col">Size</th><th scope="col">Quantity</th>
-          {onChange && <th scope="col">Action</th>}</tr></thead>
+        <thead><tr><th scope="col">Item</th><th scope="col">Size</th><th scope="col">Ordered</th>
+          {onChange ? <th scope="col">Action</th> : <><th scope="col">Received</th><th scope="col">Remaining</th></>}
+        </tr></thead>
         <tbody>{lines.map(line => (
           <tr key={line.variant_id}>
             <td>{line.item_name}</td><td>{line.size}</td>
@@ -120,6 +119,7 @@ function OrderLines({ lines, onChange }) {
               }} /> : line.quantity}</td>
             {onChange && <td><Button type="button" aria-label={`Remove ${line.item_name}, size ${line.size}`}
               onClick={() => onChange(lines => lines.filter(value => value.variant_id !== line.variant_id))}>Remove</Button></td>}
+            {!onChange && <><td>{line.received}</td><td>{line.remaining}</td></>}
           </tr>
         ))}</tbody>
       </table>
@@ -127,20 +127,21 @@ function OrderLines({ lines, onChange }) {
   );
 }
 
-function OrderDetail({ record, onClose, onEdit }) {
+function OrderDetail({ record, onClose, onEdit, onCancelOrder }) {
   return (
-    <Card className="workspace-card purchase-print" variant="outlined">
-      <div className="section-heading">
-        <Typography variant="h5" component="h2">Purchase order {record.code}</Typography>
-        <div className="template-actions screen-only">
-          {record.status === 'pending' && <Button type="button" variant="outlined" onClick={onEdit}>Edit</Button>}
-          <Button type="button" variant="outlined" onClick={() => window.print()}>Print</Button>
-          <Button type="button" onClick={onClose}>Close details</Button>
-        </div>
-      </div>
+    <PrintRecord title={`Purchase order ${record.code}`} actions={<>
+      {['pending', 'partial'].includes(record.status) && <InventoryLink page="receipts" query={{ order: record.id }}>Receive</InventoryLink>}
+      {record.back_order_id && <InventoryLink page="back-orders" query={{ id: record.back_order_id }}>Back order</InventoryLink>}
+      <InventoryLink page="receipts" query={{ orderHistory: record.id }}>Receipt history</InventoryLink>
+      {Boolean(record.editable) && <Button type="button" variant="outlined" onClick={onEdit}>Edit</Button>}
+      {Boolean(record.editable) && onCancelOrder && <Button type="button" color="secondary" onClick={onCancelOrder}>
+        Cancel order
+      </Button>}
+      <Button type="button" onClick={onClose}>Close details</Button>
+    </>}>
       <dl className="account-details">
         <div><dt>Supplier</dt><dd>{record.supplier_name}</dd></div>
-        <div><dt>Created</dt><dd>{dateFormat.format(record.created_at * 1000)}</dd></div>
+        <div><dt>Created</dt><dd>{formatDate(record.created_at)}</dd></div>
         <div><dt>Status</dt><dd>{statuses[record.status]}</dd></div>
         <div><dt>Lines</dt><dd>{record.lines.length}</dd></div>
         <div><dt>Units ordered</dt><dd>{record.lines.reduce((sum, line) => sum + line.quantity, 0)}</dd></div>
@@ -148,7 +149,10 @@ function OrderDetail({ record, onClose, onEdit }) {
       <OrderLines lines={record.lines} />
       {record.notes && <div className="order-notes"><Typography variant="subtitle1" component="h3">Remarks</Typography>
         <p>{record.notes}</p></div>}
-    </Card>
+      {record.cancellation_reason && <div className="order-notes"><Typography variant="subtitle1" component="h3">
+        Cancelled by {record.cancelled_by}
+      </Typography><p>{record.cancellation_reason}</p></div>}
+    </PrintRecord>
   );
 }
 
@@ -165,11 +169,12 @@ export function PurchaseOrderSummary({ request }) {
   );
 }
 
-export default function PurchaseOrders({ request }) {
-  const [selectedId, setSelectedId] = useState(null);
+export default function PurchaseOrders({ request, initialId, canCorrect }) {
+  const [selectedId, setSelectedId] = useState(initialId);
   const [editing, setEditing] = useState(false);
   const [revision, setRevision] = useState(0);
   const [notice, setNotice] = useState('');
+  const [cancelling, setCancelling] = useState(false);
   const list = useRecords(request, ENDPOINT, revision);
   const detail = useResource(request, selectedId ? `${ENDPOINT}/${selectedId}` : null, revision);
   const record = detail?.data?.record;
@@ -179,6 +184,7 @@ export default function PurchaseOrders({ request }) {
     setSelectedId(id);
     setEditing(edit);
     setNotice('');
+    setCancelling(false);
   }
 
   function saved({ id, code }) {
@@ -194,12 +200,16 @@ export default function PurchaseOrders({ request }) {
       {editing && (!selectedId || record) && <OrderEditor request={request} record={record}
         onSave={saved} onCancel={() => setEditing(false)} />}
       {selectedId && !editing && (record
-        ? <OrderDetail record={record} onClose={() => select(null)} onEdit={() => setEditing(true)} />
+        ? <OrderDetail record={record} onClose={() => select(null)} onEdit={() => { setCancelling(false); setEditing(true); }}
+            onCancelOrder={canCorrect ? () => setCancelling(true) : undefined} />
         : <Card className="workspace-card" variant="outlined" aria-busy={!detail}>
           {!detail ? <p role="status">Loading order…</p> : <p className="error-message" role="alert">{detail.error}</p>}
           {detail?.error && <Button type="button" onClick={() => setRevision(value => value + 1)}>Retry</Button>}
           <Button type="button" onClick={() => select(null)}>Close details</Button>
         </Card>)}
+      {cancelling && canCorrect && record?.editable === 1 && <CorrectionForm request={request}
+        endpoint={`${ENDPOINT}/${record.id}/cancel`} label="Cancel order" onClose={() => setCancelling(false)}
+        onSave={() => { setCancelling(false); setNotice(`${record.code} cancelled.`); setRevision(value => value + 1); }} />}
       <Card className="workspace-card screen-only" variant="outlined" aria-busy={!list.result}>
         <div className="section-heading">
           <Typography component="h2" variant="h6">Purchase orders</Typography>
@@ -217,7 +227,7 @@ export default function PurchaseOrders({ request }) {
                 <th key={label} scope="col">{label}</th>)}</tr></thead>
               <tbody>
                 {rows.map(row => <tr key={row.id}>
-                  <td>{row.code}</td><td>{dateFormat.format(row.created_at * 1000)}</td><td>{row.supplier_name}</td>
+                  <td>{row.code}</td><td>{formatDate(row.created_at)}</td><td>{row.supplier_name}</td>
                   <td>{row.line_count}</td><td>{row.unit_count}</td><td>{statuses[row.status]}</td>
                   <td><Button type="button" aria-label={`View ${row.code}`} disabled={editing} onClick={() => select(row.id)}>View</Button></td>
                 </tr>)}

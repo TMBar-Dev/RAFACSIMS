@@ -25,19 +25,19 @@ This checklist turns the [V1 design](DESIGN.md) into implementation steps. Start
 
 ## 4. Add receiving, back orders and stock balances
 
-- [ ] Add receipt lines linked to purchase-order lines and stock movements linked to size variants. If existing stock needs to carry forward, map it to variants and record opening balances once before switching the stock view to movement totals.
-- [ ] Implement Receive from a PO or BO. Calculate remaining units on the server, allow zero on individual lines and require at least one positive quantity. Commit the receipt, inbound movements and updated statuses together.
-- [ ] Generate and update back orders for shortages. Confirm whether repeated deliveries should reuse one open BO per PO as proposed in the design. Add the BO list, receipt history, printable details and pending back-order dashboard count.
-- [ ] Connect the Stock Management screen to live balances. Show item totals, size breakdowns and movement history.
-- [ ] Verify that ordering 10, receiving 6 and later receiving 4 brings stock from 0 to 6 to 10 and closes both records. Check multi-size deliveries, over-receipt rejection, duplicate submissions, concurrent receipts and rollback.
+- [x] Add receipt lines and stock movements. Add administrator mapping to carry each existing stock row into a catalog size as one opening balance.
+- [x] Implement Receive from a PO or BO. Calculate remaining units on the server, accept zero on individual lines, and commit the receipt, movements and status updates together.
+- [x] Reuse a single BO reference per purchase order across repeat deliveries and corrections. Add the BO list, receipt history, printable details and a pending back-order dashboard count.
+- [x] Connect Stock Management to live item totals, size breakdowns and movement history.
+- [x] Verify the 6-then-4 receipt sequence in isolated tests, including multi-size deliveries, over-receipt rejection, duplicate submissions, concurrent receipts and rollback.
 
 ## 5. Add uniform issue, supplier returns and corrections
 
-- [ ] Add multi-line uniform issue to a cadet and multi-line returns to a supplier. Record the actor and stable references. Confirm whether supplier returns need a separate “returned by” field.
-- [ ] Validate outbound quantities against available stock by size, including repeated lines for the same variant. Commit each transaction and its movements atomically with retry protection.
-- [ ] Add searchable issue and return lists, printable details and Cadet Kit history with distinct line and quantity totals. Confirm whether current holdings and cadet handbacks are a later workflow.
-- [ ] Agree who can cancel or reverse records. Add confirmed removal of eligible unposted records and auditable reversals of posted receipts, issues and returns. Recalculate affected order and kit totals and reject reversals that would leave invalid stock or receipt totals.
-- [ ] Verify that issuing 2 and returning 1 from a balance of 10 leaves 7, and reversing the issue leaves 9. Check concurrent issues, insufficient stock and historical links after cadet or item edits.
+- [x] Add multi-line uniform issues and supplier returns with stable references and the signed-in actor on each transaction.
+- [x] Validate cumulative outbound quantities per size and save with retry protection in one transaction.
+- [x] Add searchable issues and returns, printable details, and Cadet Kit issue history with line and unit totals.
+- [x] Restrict confirmed order cancellation and stock reversals to administrators. Keep cancellation and reversal reasons in the audit history and recalculate affected stock, order and kit totals.
+- [x] Verify issue, return and reversal balance changes, competing issues, insufficient stock, and historical recipient labels in isolated tests.
 
 ## 6. Finish account administration and branding
 
@@ -52,4 +52,5 @@ This checklist turns the [V1 design](DESIGN.md) into implementation steps. Start
 - [ ] Review each changed or moved file against Git, including imports, API contracts, auth, D1 bindings and build paths. Preserve the production D1 ID and keep V1 data and configuration out of staging and published assets.
 - [ ] Run isolated checks for each changed workflow as appropriate. Keep source review, dependency audit, Cloudflare build and browser verification distinct. Leave build verification to Cloudflare under the current project instructions.
 - [ ] Obtain explicit approval for each GitHub push. After deployment, exercise the full order-to-issue flow and access restrictions with test accounts in the browser. Verify that hosting serves only `build/` and allowed public assets.
-- [ ] In the deployed browser, also verify register edits, order pickers, the dashboard order count and purchase-order print output.
+- [ ] In the deployed browser, also verify register edits, order and stock pickers, both dashboard counts, receipt and issue history, print output and administrator corrections.
+- [ ] Establish whether a future workflow needs cadet handbacks, current holdings or a separate supplier-return contact field.

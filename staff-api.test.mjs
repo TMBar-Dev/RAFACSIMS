@@ -364,4 +364,166 @@ test('Staff Accounts and operational workflows', async t => {
     assert.deepEqual((await request(path, staffSession)).data.record, edited);
     assert.equal(DB.database.prepare("SELECT quantity FROM stock WHERE reference = 'V1-STOCK'").get().quantity, 12);
   });
+
+  await t.test('receives purchases, posts stock and maintains one back order through repeat deliveries', async () => {
+    const admin = { cookie: adminCookie };
+    const login = await request('login', { body: { username: credentials.username, password: 'ReplacementStaff!456' } });
+    const staff = { cookie: login.cookie };
+    const supplier = (await request('suppliers', { ...admin, body: { name: 'Ledger supplier', status: 'active' } })).data.id;
+    const item = (await request('catalog', { ...admin, body: {
+      supplier_id: supplier, name: 'Ledger coat', uniform_type: 'blue', status: 'active'
+    } })).data.id;
+    const variant = size => request('variants', { ...admin, body: { item_id: item, size, status: 'active' } });
+    const small = (await variant('Small')).data.id;
+    const large = (await variant('Large')).data.id;
+    const createOrder = lines => request('purchase-orders', { ...staff, body: { supplierId: supplier, lines } });
+    const orderId = (await createOrder([{ variantId: small, quantity: 10 }, { variantId: large, quantity: 3 }])).data.id;
+    const readOrder = async () => (await request(`purchase-orders/${orderId}`, staff)).data.record;
+    const initial = await readOrder();
+    const smallLine = initial.lines.find(line => line.variant_id === small).id;
+    const largeLine = initial.lines.find(line => line.variant_id === large).id;
+    const readStock = async () => (await request(`inventory-stock/${item}/sizes`, staff)).data.records.map(row => row.quantity);
+    const receive = (lines, extras = {}) => request('receipts', { ...staff, body: { orderId, lines, ...extras } });
+    assert.equal((await request('inventory-stock')).status, 401);
+    assert.deepEqual(await readStock(), [0, 0]);
+    assert.equal((await receive([{ orderLineId: smallLine, quantity: 0 }])).status, 400);
+    assert.equal((await receive([{ orderLineId: smallLine, quantity: 1 }, { orderLineId: largeLine, quantity: 4 }])).status, 409);
+    assert.deepEqual(await readStock(), [0, 0]);
+    assert.deepEqual((await request(`receipts?orderId=${orderId}`, staff)).data.records, []);
+    const step = [{ orderLineId: smallLine, quantity: 6 }, { orderLineId: largeLine, quantity: 0 }];
+    const first = await receive(step, { requestId: 'test-receiving-first' });
+    assert.equal(first.status, 201);
+    assert.deepEqual(await receive(step, { requestId: 'test-receiving-first' }), first);
+    assert.equal((await receive([{ orderLineId: smallLine, quantity: 7 }], { requestId: 'test-receiving-first' })).status, 409);
+    const partial = await readOrder();
+    assert.equal(partial.status, 'partial');
+    assert.deepEqual(await readStock(), [6, 0]);
+    assert.equal(partial.lines.find(line => line.id === smallLine).remaining, 4);
+    const backOrderId = partial.back_order_id;
+    const backOrderPath = `back-orders/${backOrderId}`;
+    assert.ok(backOrderId);
+    assert.equal((await request('back-orders/summary', staff)).data.pending, 1);
+    assert.equal((await receive([{ orderLineId: smallLine, quantity: 1 }], { backOrderId: backOrderId + 100 })).status, 409);
+    const delivered = [{ orderLineId: smallLine, quantity: 4 }];
+    const competing = await Promise.all([
+      receive(delivered, { backOrderId, requestId: 'test-receiving-race-one' }),
+      receive(delivered, { backOrderId, requestId: 'test-receiving-race-two' })
+    ]);
+    assert.deepEqual(competing.map(result => result.status).sort(), [201, 409]);
+    assert.equal((await readOrder()).back_order_id, backOrderId);
+    assert.deepEqual(await readStock(), [10, 0]);
+    const final = await receive([{ orderLineId: largeLine, quantity: 3 }], { backOrderId });
+    assert.equal(final.status, 201);
+    assert.equal((await readOrder()).status, 'received');
+    assert.equal((await request(backOrderPath, staff)).data.record.status, 'closed');
+    assert.deepEqual(await readStock(), [10, 3]);
+    assert.equal((await request('back-orders/summary', staff)).data.pending, 0);
+    assert.equal((await request(`receipts?orderId=${orderId}`, staff)).data.records.length, 3);
+
+    const whole = (await createOrder([{ variantId: small, quantity: 1 }, { variantId: large, quantity: 1 }])).data.id;
+    const wholeRecord = (await request(`purchase-orders/${whole}`, staff)).data.record;
+    const full = await request('receipts', { ...staff, body: {
+      orderId: whole, lines: wholeRecord.lines.map(line => ({ orderLineId: line.id, quantity: 1 }))
+    } });
+    assert.equal(full.status, 201);
+    assert.equal((await request(`purchase-orders/${whole}`, staff)).data.record.back_order_id, null);
+    assert.deepEqual(await readStock(), [11, 4]);
+  });
+
+  await t.test('issues and returns stock, preserves cadet kit history and audits corrections', async () => {
+    const admin = { cookie: adminCookie };
+    const login = await request('login', { body: { username: credentials.username, password: 'ReplacementStaff!456' } });
+    const staff = { cookie: login.cookie };
+    const { id: supplier } = (await request('suppliers?q=Ledger%20supplier', staff)).data.records[0];
+    const { id: item } = (await request(`catalog?supplierId=${supplier}`, staff)).data.records[0];
+    const [small, large] = (await request(`variants?itemId=${item}`, staff)).data.records;
+    const cadet = { first_name: 'Quinn', last_name: 'Fixture', service_number: 'KIT-101', status: 'active' };
+    const { id: cadetId } = (await request('cadets', { ...admin, body: cadet })).data;
+    const sizes = async () => (await request(`inventory-stock/${item}/sizes`, staff)).data.records.map(row => row.quantity);
+    const readKit = async () => (await request(`cadet-kit/${cadetId}`, staff)).data.record;
+    const issueBody = { cadetId, requestId: 'test-uniform-issue-0001', lines: [
+      { variantId: small.id, quantity: 1 }, { variantId: small.id, quantity: 1 }
+    ] };
+    const issue = await request('issues', { ...staff, body: issueBody });
+    assert.equal(issue.status, 201);
+    assert.deepEqual(await request('issues', { ...staff, body: issueBody }), issue);
+    assert.deepEqual(await sizes(), [9, 4]);
+    assert.equal((await readKit()).unit_count, 2);
+    assert.equal((await readKit()).line_count, 1);
+
+    const returned = await request('supplier-returns', { ...staff, body: { supplierId: supplier, lines: [
+      { variantId: small.id, quantity: 1 }
+    ] } });
+    assert.equal(returned.status, 201);
+    assert.deepEqual(await sizes(), [8, 4]);
+    const issuePath = `issues/${issue.data.id}`;
+    assert.equal((await request(`${issuePath}/reverse`, { ...staff, body: { reason: 'Correction' } })).status, 403);
+    assert.equal((await request(`cadets/${cadetId}`, { ...admin, body: { ...cadet, first_name: 'Updated' } })).status, 200);
+    assert.equal((await readKit()).name, 'Updated Fixture');
+    assert.equal((await request(issuePath, staff)).data.record.party_name, 'Quinn Fixture');
+    const correction = { reason: 'Incorrect recipient', requestId: 'test-uniform-reverse-0001' };
+    const reversal = await request(`${issuePath}/reverse`, { ...admin, body: correction });
+    assert.equal(reversal.status, 201);
+    assert.deepEqual(await request(`${issuePath}/reverse`, { ...admin, body: correction }), reversal);
+    assert.equal((await request(issuePath, staff)).data.record.reversal_reason, correction.reason);
+    assert.deepEqual(await sizes(), [10, 4]);
+    assert.equal((await readKit()).unit_count, 0);
+    assert.equal((await readKit()).issue_count, 0);
+
+    const oversize = await request('issues', { ...staff, body: { cadetId, lines: [
+      { variantId: small.id, quantity: 1 }, { variantId: large.id, quantity: 5 }
+    ] } });
+    assert.equal(oversize.status, 409);
+    assert.deepEqual(await sizes(), [10, 4]);
+    const competing = await Promise.all([1, 2].map(attempt => request('issues', { ...staff, body: {
+      cadetId, requestId: `test-uniform-race-${attempt}`, lines: [{ variantId: small.id, quantity: 6 }]
+    } })));
+    assert.deepEqual(competing.map(result => result.status).sort(), [201, 409]);
+    assert.deepEqual(await sizes(), [4, 4]);
+
+    const oldest = DB.database.prepare("SELECT id, order_id FROM inventory_transactions WHERE kind = 'receipt' ORDER BY id LIMIT 1").get();
+    assert.equal((await request(`receipts/${oldest.id}/reverse`, { ...admin, body: { reason: 'Incorrect delivery' } })).status, 409);
+    assert.deepEqual(await sizes(), [4, 4]);
+    const winner = competing.find(result => result.status === 201).data.id;
+    assert.equal((await request(`issues/${winner}/reverse`, { ...admin, body: { reason: 'Duplicate issue docket' } })).status, 201);
+    assert.equal((await request(`receipts/${oldest.id}/reverse`, { ...admin, body: { reason: 'Incorrect delivery' } })).status, 201);
+    const reopened = (await request(`purchase-orders/${oldest.order_id}`, staff)).data.record;
+    assert.equal(reopened.status, 'partial');
+    assert.equal(reopened.editable, 0);
+    assert.equal((await request(`back-orders/${reopened.back_order_id}`, staff)).data.record.status, 'open');
+    assert.deepEqual(await sizes(), [4, 4]);
+    assert.equal((await request(`supplier-returns/${returned.data.id}/reverse`, { ...admin, body: { reason: 'Return withdrawn' } })).status, 201);
+    assert.deepEqual(await sizes(), [5, 4]);
+    const movements = (await request(`inventory-stock/${item}/movements`, staff)).data.records;
+    assert.ok(movements.some(row => row.kind === 'reversal' && row.original_code));
+
+    const extra = await request('purchase-orders', { ...staff, body: { supplierId: supplier, lines: [{ variantId: small.id, quantity: 1 }] } });
+    const cancelPath = `purchase-orders/${extra.data.id}/cancel`;
+    assert.equal((await request(cancelPath, { ...staff, body: { reason: 'Duplicate order' } })).status, 403);
+    assert.equal((await request(cancelPath, { ...admin, body: { reason: 'Duplicate order' } })).status, 200);
+    const cancelled = (await request(`purchase-orders/${extra.data.id}`, staff)).data.record;
+    assert.equal(cancelled.status, 'cancelled');
+    assert.equal(cancelled.cancellation_reason, 'Duplicate order');
+    assert.equal((await request('receipts', { ...staff, body: {
+      orderId: extra.data.id, lines: [{ orderLineId: cancelled.lines[0].id, quantity: 1 }]
+    } })).status, 409);
+
+    assert.equal((await request('opening-balances', staff)).status, 403);
+    const { id: legacyId } = (await request('opening-balances?q=v1-stock', admin)).data.records[0];
+    const opening = { legacyId, variantId: small.id, notes: 'Matched catalog size', requestId: 'test-opening-balance-0001' };
+    const posted = await request('opening-balances', { ...admin, body: opening });
+    assert.equal(posted.status, 201);
+    assert.deepEqual(await request('opening-balances', { ...admin, body: opening }), posted);
+    assert.equal((await request('opening-balances', { ...admin, body: { ...opening, requestId: 'test-opening-balance-0002' } })).status, 409);
+    assert.deepEqual(await sizes(), [17, 4]);
+    assert.equal(DB.database.prepare('SELECT quantity FROM stock WHERE id = ?').get(legacyId).quantity, 12);
+
+    const kitIssue = await request('issues', { ...staff, body: { cadetId, lines: [
+      { variantId: small.id, quantity: 2 }, { variantId: large.id, quantity: 1 }
+    ] } });
+    assert.equal(kitIssue.status, 201);
+    assert.deepEqual(await sizes(), [15, 3]);
+    assert.equal((await readKit()).unit_count, 3);
+    assert.equal((await readKit()).line_count, 2);
+  });
 });

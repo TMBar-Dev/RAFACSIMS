@@ -23,6 +23,8 @@ The existing D1 schema requires nonempty name columns, so new staff links use fi
 | `suppliers` | Unique name, address, contact details and active status. |
 | `catalog_items`, `catalog_variants` | Item names are unique per supplier, and sizes are unique per item. Items store description, Blue/Green type and status. Variants have their own status. |
 | `purchase_orders`, `purchase_order_lines` | A purchase order has a generated reference, one supplier, remarks, actor, status and version. Lines reference individual size variants and retain the recorded item and size labels. |
+| `back_orders`, `purchase_order_cancellations` | One back-order reference per purchase order, and an audit record for cancelling an order before its first receipt. |
+| `inventory_transactions`, `stock_movements` | Posted receipts, issues, supplier returns, opening balances and reversals. Each movement records a signed quantity for a variant. Receipt movements also reference the originating purchase-order line. |
 
 Relationships and initial assumptions:
 
@@ -31,7 +33,7 @@ Relationships and initial assumptions:
 - The original `orders` table represents one stock item per row. Its required `stock_id` prevents deletion of referenced stock. Multi-line purchase orders use separate tables so original rows stay available for reconciliation.
 - Optional order links identify a cadet, staff member and creating user account. Deleting one of those linked records sets its corresponding order reference to null; it does not delete the order.
 - Timestamps are Unix seconds. `updated_at` receives an initial value when a record is created; future write handlers must update it explicitly. There is no automatic timestamp-update trigger.
-- Creating or editing a purchase order leaves stock quantities alone. Receiving will post stock movements.
+- Creating or editing a purchase order leaves stock quantities alone. Receiving adds stock when a receipt is posted.
 
 `CREATE TABLE IF NOT EXISTS` initializes missing tables. Changes to existing table definitions require a separate migration.
 
@@ -49,22 +51,35 @@ After signing in and completing any required password change, the application pr
 
 | Page | Application route | Current scope |
 | --- | --- | --- |
-| Dashboard | `#/dashboard` | Live pending purchase-order count for users with operational access. |
+| Dashboard | `#/dashboard` | Live pending purchase-order and back-order counts for users with operational access. |
 | User Management | `#/users` | Working administrator-only account list and account creation, backed by the existing D1 users table. |
 | Cadets | `#/cadets` | Search and view cadets. Administrators can add and edit records, including inactive and left statuses. |
 | Suppliers | `#/suppliers` | Administrator-only supplier register and contact maintenance. |
 | Item Catalog | `#/catalog` | Administrator-only catalog maintenance. View an item to manage its sizes. |
 | Orders | `#/orders` | Search, create, print and edit pending purchase orders. |
-| Stock Management | `#/stock` | Stock register layout, proposed columns and empty-state guidance. |
+| Receiving | `#/receipts` | Post quantities from a PO or BO and view or print receipt history. |
+| Back Orders | `#/back-orders` | View remaining quantities, print details and open receiving. |
+| Stock Management | `#/stock` | View live item and size balances and movement history. Administrators can map legacy stock as opening balances. |
+| Issue Uniform | `#/issues` | Issue stock to an active cadet and view or print issue history. |
+| Supplier Returns | `#/supplier-returns` | Send stock back to a supplier and view or print return history. |
+| Cadet Kit | `#/cadet-kit` | View issue history and unreversed issue, line and unit totals by cadet. |
 | Staff Accounts | `#/staff` | Working administrator-only staff directory and profile creation with new or existing sign-in accounts. |
 
-Stock Management remains a template until receiving and stock movements are implemented. The [implementation checklist](TODO.md) tracks those workflows and the eventual V1 data reconciliation.
+The [implementation checklist](TODO.md) tracks account administration, settings and eventual V1 data reconciliation.
 
 Staff Accounts and User Management navigation are restricted to the administrator view. This frontend visibility rule is not an authorization boundary: both APIs independently require a live administrator session and completion of any mandatory password change before they return records or create accounts.
 
-Cadets, Orders and Stock Management are visible to administrators and ordinary users linked through Staff Accounts. The browser checks operational access when it restores or establishes a session and after a password change. A newly linked user can reload to refresh navigation. The Worker checks D1 on each operational request.
+Operational pages are visible to administrators and ordinary users linked through Staff Accounts. The browser checks operational access when it restores or establishes a session and after a password change. A newly linked user can reload to refresh navigation. The Worker checks D1 on each operational request.
 
 Staff can read active register records and create or edit purchase orders. Administrators can also view retired records and maintain the registers. Catalog items keep their supplier after creation, and existing size variants can be retired or reactivated. Purchase orders retain supplier, item and size labels for historical display. An order keeps its supplier after creation. Pending orders can keep or reduce an existing inactive line, while new lines need an active supplier, item and size.
+
+### Receiving and stock corrections
+
+Receive from a purchase order or its back order. A partial delivery opens a BO reference that stays with the order through later deliveries and reversals. A receipt can leave individual lines at zero if it adds units against at least one line. The Worker validates order balances as the movements commit.
+
+Uniform issues and supplier returns reduce available stock. Cadet Kit counts posted, unreversed issues, and history retains the names recorded at posting. Supplier returns record the signed-in actor. Cadet handbacks and current holdings are outside these issue totals.
+
+Administrators can cancel a pending purchase order with no receiving history, or reverse a posted receipt, issue or supplier return with a recorded reason. Reversals preserve the original, post opposite quantities and refresh order or kit totals. Receipt reversals require enough stock to undo the receipt. To carry forward existing D1 stock, use **Map legacy stock** to match a legacy row to an active catalog size and post its quantity once. This leaves the source row intact.
 
 Existing registration, sign-in, session restoration, logout and password-change flows remain the account foundation. Management templates mount only after an authenticated session is restored or established and the account no longer requires its initial password to be changed. The optional password-change form remains available from the signed-in interface.
 
@@ -179,8 +194,11 @@ Both Staff Accounts endpoints and both User Management endpoints require an auth
 - `POST /api/{cadets,suppliers,catalog,variants}` creates a record. Append `/ID` to update one. Writes require an administrator and use the fields in the corresponding register.
 - `POST /api/purchase-orders` creates an order with `supplierId`, optional `notes` and 1–50 `lines`. Each line has `variantId` and a positive whole `quantity` up to 1,000,000. A caller can reuse its `requestId` to recover the original reference if the create response is lost. Append `/ID` and supply the current `version` when editing a pending order.
 - `GET /api/purchase-orders/summary` returns `pending`, the count of orders awaiting all or part of their delivery.
+- `GET /api/{receipts,back-orders,issues,supplier-returns,cadet-kit,inventory-stock}` provides searchable lists and `/ID` details. Back orders also expose `/summary`. Stock item details expose `/ID/sizes` and `/ID/movements`. For filtered history use `orderId` on receipts or `cadetId` on issues.
+- `POST /api/receipts` accepts `orderId`, optional `backOrderId`, optional `notes` and lines with `orderLineId` and `quantity`. `POST /api/issues` or `POST /api/supplier-returns` accepts `cadetId` or `supplierId`, optional `notes` and lines with `variantId` and `quantity`. Reusing the same `requestId` with the same transaction data returns the original reference.
+- Administrators can POST `reason` to `/api/purchase-orders/ID/cancel` or to `/api/{receipts,issues,supplier-returns}/ID/reverse`. The administrator endpoint `/api/opening-balances` lists eligible legacy stock rows and accepts `legacyId`, `variantId` and mapping `notes`.
 
-Management writes share a per-IP rate limit separate from authentication and account maintenance. The isolated API suite covers permissions, register search and pagination, duplicate and inactive records, multi-size orders, rollback, repeat creates, stale edits and unchanged stock. Cloudflare build and browser verification cover the remaining integration checks.
+Management writes share a per-IP rate limit separate from authentication and account maintenance. The isolated API suite covers register and order behaviour, partial and full receiving, repeated requests, competing stock writes, rollback, reversal audit, legacy mapping and cadet kit totals. Cloudflare build and browser verification cover the remaining integration checks.
 
 JSON POST requests must include a matching Origin header (automatically sent by the browser). All API responses are private/no-store. Password hashing uses Workers Web Crypto PBKDF2 with 100,000 iterations for runtime compatibility. Authentication requests are rate limited by source IP using D1. Expired rate-limit buckets and sessions are removed opportunistically.
 
@@ -189,11 +207,13 @@ The unused Express/MySQL backend and its duplicate dependency manifests have bee
 ## Files
 
 - main.jsx and App.css: React interface and styling.
-- templates.jsx: Dashboard, navigation definitions and the Stock Management template.
+- templates.jsx: Dashboard and navigation definitions.
 - registers.jsx, purchase-orders.jsx and management-ui.jsx: live register and purchase-order screens and shared search and picker components.
 - users.jsx: live administrator account listing, pagination and account creation.
 - staff.jsx: live staff profile listing and creation with new or existing login accounts.
 - worker.js and management.js: authentication, D1 initialization and operational API handlers.
+- inventory.js and inventory-schema.js: receipt, back-order, stock and correction APIs and storage.
+- inventory-transactions.jsx, inventory-pages.jsx and inventory-ui.jsx: receiving, stock, issue, return and Cadet Kit screens.
 - schema.js: management table definitions, constraints and relationships used during Worker initialization.
 - schema.test.mjs: isolated SQLite tests for the management schema; no live D1 writes.
 - users-api.test.mjs: isolated SQLite-backed API checks, invoked with npm test; not a live D1 or frontend/browser test.
