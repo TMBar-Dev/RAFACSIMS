@@ -4,24 +4,11 @@ The React frontend and authentication API deploy together as the `rafacsims` Wor
 
 ## Staff Accounts
 
-Administrators can use `#/staff` to list real staff profiles from the `staff` table and create staff with working sign-in accounts. This page replaces the former Staff Accounts template. Its list supports refresh and Previous/Next navigation, with at most 25 profiles per page.
+Administrators can use `#/staff` to create staff logins with a username, temporary password and role. New staff must change their password on first sign-in. The directory shows username, role and password status, with refresh and pagination at 25 entries per page.
 
-The creation form provides two account modes:
+Use **Use an existing login** to add an account to the staff directory by username. Linking preserves the account's credentials and role. Each account can be linked once, and new-login creation saves the account and its staff link in one transaction.
 
-- **Create a new login:** create a staff profile and a new `users` record together. Supply a unique username, a `user` or `admin` role, and a confirmed temporary password of 12-128 characters. The new account must change its temporary password on first login.
-- **Use an existing login:** create a staff profile linked to an existing username. The existing account's password, role and password-change requirement are preserved. A login can belong to only one staff profile.
-
-First and last names are required. A service number, rank, appointment, email address and phone number are optional. Service numbers, when supplied, must be unique. Duplicate usernames, service numbers or account links are rejected. New-login creation is transactional, so a failed staff insert does not leave an orphaned sign-in account.
-
-Initialization creates a missing staff profile for the existing `admin` account, using the placeholder name **System Administrator**. It links the existing account rather than recreating it: changed passwords and any existing linked staff profile remain untouched. This does not backfill every user as staff. Accounts created through User Management or public registration can be linked explicitly using the existing-login mode.
-
-Staff profile status and appointment do not change sign-in permissions; account roles remain in `users`. Existing unlinked profiles can be listed with no linked account. Editing or deleting profiles, editing existing account roles and resetting existing passwords are not part of this feature.
-
-### Staff Accounts change review: 17 November 2026
-
-The full isolated test run passed all 15 tests with zero failures. It covers administrator and first-login gates, inclusion of the existing admin, preservation of changed admin passwords and profile details across reinitialization, existing-login credential preservation, atomic creation/rollback, duplicate validation, safe pagination and the existing account/schema regressions. The staff page uses the existing request helper and remains behind the session, password-change and administrator gates. Cadets remains a template until the staff workflow has been tested in the browser.
-
-`npm test` includes `staff-api.test.mjs` alongside the other root `*.test.mjs` suites. The recorded full run used `node --test --test-isolation=none users-api.test.mjs schema.test.mjs staff-api.test.mjs`. These tests use isolated SQLite storage and do not modify live D1 records. No local frontend build or browser verification has been performed. After deployment, verify the admin profile, both staff-creation modes, first-login password replacement and the existing account flows in the browser.
+The existing D1 schema requires nonempty name columns, so new staff links use fixed markers there. Existing staff records and order references stay in place. The form and API no longer collect or return profile details. Initialization adds a missing staff link for the existing administrator.
 
 ## Management database schema
 
@@ -150,7 +137,7 @@ Before marking this layout verified in production:
 
 Remove any previous `--assets` command-line argument: wrangler.jsonc configures both the Worker API and assets. The build identity must have permission to deploy Workers and bind the specified D1 database. The database name in the config assumes `rafacsims`; adjust it if you chose another name. The database ID is already configured.
 
-The first API request after deployment creates any missing authentication and management tables, inserts admin only if the account does not already exist, and links a missing System Administrator staff profile to that account. Existing admin passwords and linked staff profiles are preserved. No manual SQL or separate migration command is required for these initial table definitions. D1 must already exist; this code does not create the Cloudflare database resource.
+The first API request after deployment creates any missing authentication and management tables, inserts admin only if the account does not already exist, and adds a missing staff link for that account. Existing admin passwords and linked staff profiles are preserved. No manual SQL or separate migration command is required for these initial table definitions. D1 must already exist; this code does not create the Cloudflare database resource.
 
 ## First sign-in
 
@@ -172,8 +159,8 @@ Authentication, administrator account management and staff profile listing/creat
 - POST /api/logout
 - GET /api/users?after=0: administrator-only list of up to 25 accounts. `after` is a nonnegative ID cursor. Returns `users` with `id`, `username`, `role`, `mustChangePassword` and `createdAt`, plus `nextCursor` or null.
 - POST /api/users: administrator-only creation with `username`, `password` and `role`; the created account must change its password on first login.
-- GET /api/staff?after=0: administrator-only list of up to 25 profiles ordered by staff ID. Returns `staff` and `nextCursor` or null. Profile fields are `id`, `userId`, `serviceNumber`, `firstName`, `lastName`, `rank`, `appointment`, `email`, `phone`, `status`, `createdAt` and `updatedAt`. Its `account` is null or contains only `id`, `username`, `role` and `mustChangePassword`.
-- POST /api/staff: administrator-only profile creation with `accountMode` of `create` or `existing`, `username`, `firstName`, `lastName`, and optional `serviceNumber`, `rank`, `appointment`, `email` and `phone`. New-login mode also requires `password` and `role`. Existing-login mode preserves the account's credentials and role. Creation returns a message without credentials or password hashes.
+- GET /api/staff?after=0 returns up to 25 entries ordered by staff ID, along with the next cursor or null. Each entry contains its staff ID and an account with ID, username, role and password-change status. Unlinked entries have a null account.
+- POST /api/staff creates a staff login from username, password and role. To link an existing login, send username and accountMode set to existing. The response contains a confirmation message.
 
 Both Staff Accounts endpoints and both User Management endpoints require an authenticated administrator who has completed any mandatory password change. The existing same-origin JSON checks and write-request rate limit also apply to account/profile creation.
 
