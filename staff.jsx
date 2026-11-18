@@ -134,13 +134,15 @@ export default function StaffAccounts({ request, currentUser }) {
           <div className="table-scroll" role="region" aria-label="Staff accounts" tabIndex={0}>
             <table className="records-table">
               <caption className="visually-hidden">Staff accounts, page {cursors.length}.</caption>
-              <thead><tr><th scope="col">Username</th><th scope="col">Role</th><th scope="col">Password status</th></tr></thead>
+              <thead><tr><th scope="col">Username</th><th scope="col">Role</th><th scope="col">Sign-in status</th></tr></thead>
               <tbody>
                 {staff.map(person => (
                   <tr key={person.id}>
                     <td>{person.account ? <>{person.account.username}{person.account.username.toLowerCase() === currentUser.username.toLowerCase() && <span className="current-user-label"> (you)</span>}</> : 'No linked login'}</td>
                     <td>{person.account ? (person.account.role === 'admin' ? 'Administrator' : 'User') : '\u2014'}</td>
-                    <td>{person.account ? <span className={person.account.mustChangePassword ? 'password-status pending' : 'password-status'}>{person.account.mustChangePassword ? 'Change required' : 'Ready'}</span> : '\u2014'}</td>
+                    <td>{person.account ? <span className={!person.account.active || person.account.mustChangePassword ? 'password-status pending' : 'password-status'}>
+                      {!person.account.active ? 'Deactivated' : person.account.mustChangePassword ? 'Change required' : 'Ready'}
+                    </span> : '\u2014'}</td>
                   </tr>
                 ))}
                 {!staff.length && <tr><td colSpan={3}>No staff records on this page.</td></tr>}

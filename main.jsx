@@ -12,6 +12,7 @@ import PurchaseOrders from './purchase-orders.jsx';
 import TransactionsPage from './inventory-transactions.jsx';
 import { BackOrders, CadetKit, StockPage } from './inventory-pages.jsx';
 import { queryId } from './inventory-ui.jsx';
+import SettingsPage from './settings.jsx';
 
 const transactionPages = ['receipts', 'issues', 'supplier-returns'];
 const printPages = ['orders', 'back-orders', ...transactionPages];
@@ -33,6 +34,7 @@ async function api(path, body) {
 function App() {
   // `user` contains only the public account fields returned by worker.js.
   const [user, setUser] = useState(null);
+  const [branding, setBranding] = useState({});
   const [operationalAccess, setOperationalAccess] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -45,6 +47,18 @@ function App() {
   const [changingPassword, setChangingPassword] = useState(false);
   const [hash, setHash] = useState(() => window.location.hash);
   const page = readPageHash(hash);
+  const systemName = branding.name ?? 'RAFACSIMS';
+  const shortName = branding.shortName ?? 'RAFACSIMS';
+
+  useEffect(() => {
+    let active = true;
+    api('branding').then(data => {
+      if (active) setBranding(current => ({ ...data, ...current }));
+    }).catch(() => { /* Keep built-in branding available during a settings outage. */ });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => { document.title = systemName; }, [systemName]);
 
   // Navigation is independent from authentication. A direct link cannot skip
   // the session-loading or mandatory password-change gates in the render below.
@@ -147,6 +161,7 @@ function App() {
       case 'dashboard': return <Dashboard user={user} canOperate={canOperate} request={api} />;
       case 'users': return <UserManagement request={api} currentUser={user} />;
       case 'staff': return <StaffAccounts request={api} currentUser={user} />;
+      case 'settings': return <SettingsPage request={api} onUpdated={update => setBranding(current => ({ ...current, ...update }))} />;
       case 'orders': return <PurchaseOrders key={hash} request={api} initialId={queryId(query, 'id')} canCorrect={canCorrect} />;
       case 'stock': return <StockPage key={hash} request={api} query={query} canCorrect={canCorrect} />;
       case 'back-orders': return <BackOrders key={hash} request={api} query={query} />;
@@ -160,9 +175,13 @@ function App() {
   // Account forms keep their original handlers. Only the old signed-in welcome
   // panel is expanded into a navigable workspace; protected pages mount last.
   return (
-    <div className={showWorkspace && printPages.includes(page) ? 'App print-record-page' : 'App'}>
+    <div className={showWorkspace && printPages.includes(page) ? 'App print-record-page' : 'App'}
+      style={!showWorkspace && branding.coverUrl ? { backgroundImage: `url("${branding.coverUrl}")` } : undefined}>
       <AppBar position="static"><Toolbar className="app-toolbar">
-        <Typography variant="h6">RAFACSIMS</Typography>
+        <div className="app-brand">
+          {branding.logoUrl && <img src={branding.logoUrl} alt="" />}
+          <Typography variant="h6">{shortName}</Typography>
+        </div>
         {user && <div className="account-controls">
           <span className="signed-in-name">{user.username}</span>
           {showWorkspace && <Button color="inherit" disabled={busy}
@@ -210,6 +229,7 @@ function App() {
             </form>
           ) : (
             <form onSubmit={login}>
+              {systemName !== shortName && <Typography>{systemName}</Typography>}
               <Typography variant="h5" component="h1">Sign in or register</Typography>
               <TextField fullWidth required label="Username" autoComplete="username" value={username} inputProps={{ maxLength: 40 }} onChange={e => setUsername(e.target.value)} />
               <TextField fullWidth required label="Password" type="password" autoComplete="current-password" value={password} inputProps={{ maxLength: 128 }} onChange={e => setPassword(e.target.value)} />

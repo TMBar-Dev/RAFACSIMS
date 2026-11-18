@@ -4,7 +4,7 @@ The React frontend and authentication API deploy together as the `rafacsims` Wor
 
 ## Staff Accounts
 
-Administrators can use `#/staff` to create staff logins with a username, temporary password and role. New staff must change their password on first sign-in. The directory shows username, role and password status, with refresh and pagination at 25 entries per page.
+Administrators can use `#/staff` to create staff logins with a username, temporary password and role. New staff must change their password on first sign-in. The directory shows username, role and sign-in status, with refresh and pagination at 25 entries per page.
 
 Use **Use an existing login** to add an account to the staff directory by username. Linking preserves the account's credentials and role. Each account can be linked once, and new-login creation saves the account and its staff link in one transaction.
 
@@ -52,7 +52,8 @@ After signing in and completing any required password change, the application pr
 | Page | Application route | Current scope |
 | --- | --- | --- |
 | Dashboard | `#/dashboard` | Live pending purchase-order and back-order counts for users with operational access. |
-| User Management | `#/users` | Working administrator-only account list and account creation, backed by the existing D1 users table. |
+| User Management | `#/users` | Create accounts, edit usernames and roles, reset passwords and manage sign-in access. |
+| Settings | `#/settings` | Manage the system and short names, logo, sign-in cover and About Us. |
 | Cadets | `#/cadets` | Search and view cadets. Administrators can add and edit records, including inactive and left statuses. |
 | Suppliers | `#/suppliers` | Administrator-only supplier register and contact maintenance. |
 | Item Catalog | `#/catalog` | Administrator-only catalog maintenance. View an item to manage its sizes. |
@@ -67,7 +68,7 @@ After signing in and completing any required password change, the application pr
 
 The [implementation checklist](TODO.md) tracks account administration, settings and eventual V1 data reconciliation.
 
-Staff Accounts and User Management navigation are restricted to the administrator view. This frontend visibility rule is not an authorization boundary: both APIs independently require a live administrator session and completion of any mandatory password change before they return records or create accounts.
+Staff Accounts, User Management and Settings require a live administrator session and completion of any mandatory password change. Both navigation and the Worker enforce these access rules.
 
 Operational pages are visible to administrators and ordinary users linked through Staff Accounts. The browser checks operational access when it restores or establishes a session and after a password change. A newly linked user can reload to refresh navigation. The Worker checks D1 on each operational request.
 
@@ -85,11 +86,19 @@ Existing registration, sign-in, session restoration, logout and password-change 
 
 ### User Management
 
-Administrators can open `#/users` to list real accounts, refresh the list, move between pages and create a new ordinary user or administrator. Lists contain at most 25 accounts per page and use the returned cursor for the next page; the interface retains previous cursors for Previous navigation.
+Administrators can use `#/users` to list and manage accounts. Lists contain at most 25 accounts per page and use the returned cursor for the next page.
 
-Account creation requires a unique username of 3–40 letters, numbers, dots, underscores or hyphens, a role of `user` or `admin`, and a temporary password of 12–128 characters entered twice. Every account created this way must change that temporary password on its first login. Existing account passwords are not reset. Editing roles, deleting accounts and resetting existing passwords are not implemented by this feature.
+Account creation requires a unique username of 3–40 letters, numbers, dots, underscores or hyphens, a role of `user` or `admin`, and a temporary password of 12–128 characters entered twice. Administrators can edit a different account's username or role, set a temporary password, or deactivate and reactivate that account. An identity change, password reset or deactivation revokes the target account's active sessions. A reset requires the user to replace the temporary password at the next sign-in.
+
+Deactivation keeps the user ID, staff link and history. Reactivation permits a new login and preserves any pending password-change requirement. Another active administrator who has completed any required password change must perform these actions. The Worker rechecks that administrator's session during the write, so simultaneous actions cannot remove the last ready administrator. Users can change their own passwords through the existing account controls. The bootstrap username `admin` stays reserved.
 
 Creating an account through User Management does not create a staff-profile record. Use Staff Accounts to create a profile with a new login or to link an existing username. Existing public registration remains available and creates ordinary users only.
+
+### Branding
+
+The short name and logo appear in the app bar. The system name is used for the page title and the cover is used behind the sign-in screen. About Us appears as plain text on the signed-in dashboard.
+
+The app stores two image slots in the existing D1 binding. The logo accepts PNG or JPEG up to 128 KiB and 1,024 pixels per side. The cover accepts PNG or JPEG up to 512 KiB and 2,560 pixels per side. The Worker validates the image structure and dimensions before replacing a saved slot. Uploads are served only from the two branding image endpoints. [Cloudflare D1 limits](https://developers.cloudflare.com/d1/platform/limits/)
 
 ### Page and User Management change review: 17 November 2026
 
@@ -183,12 +192,15 @@ The local `V1/` copy is reference material. Importing legacy accounts or operati
 - POST /api/login: username, password
 - POST /api/change-password: currentPassword, newPassword
 - POST /api/logout
-- GET /api/users?after=0: administrator-only list of up to 25 accounts. `after` is a nonnegative ID cursor. Returns `users` with `id`, `username`, `role`, `mustChangePassword` and `createdAt`, plus `nextCursor` or null.
+- GET /api/users?after=0 returns up to 25 accounts with ID, username, role, active status, password-change status and creation time. Use the returned cursor for the next page.
 - POST /api/users: administrator-only creation with `username`, `password` and `role`; the created account must change its password on first login.
-- GET /api/staff?after=0 returns up to 25 entries ordered by staff ID, along with the next cursor or null. Each entry contains its staff ID and an account with ID, username, role and password-change status. Unlinked entries have a null account.
+- POST /api/users/ID/edit accepts `username`, `role`, `previousUsername` and `previousRole`. POST /api/users/ID/reset-password accepts `password`. POST /api/users/ID/deactivate and /api/users/ID/reactivate accept an empty JSON object.
+- GET /api/staff?after=0 returns up to 25 entries ordered by staff ID, along with the next cursor or null. Each entry contains its staff ID and an account with ID, username, role, active status and password-change status. Unlinked entries have a null account.
 - POST /api/staff creates a staff login from username, password and role. To link an existing login, send username and accountMode set to existing. The response contains a confirmation message.
+- GET /api/branding and /api/branding/{logo,cover} provide the public display metadata and images. GET /api/about requires a ready signed-in account.
+- GET and POST /api/settings are administrator-only. POST accepts `name`, `shortName` and `aboutUs`. POST /api/branding/{logo,cover} accepts the image bytes as base64 in `content`.
 
-Both Staff Accounts endpoints and both User Management endpoints require an authenticated administrator who has completed any mandatory password change. The existing same-origin JSON checks and write-request rate limit also apply to account/profile creation.
+Staff Accounts and User Management endpoints require an authenticated administrator who has completed any mandatory password change. Administrator writes use the same-origin JSON checks and are rate limited.
 
 - `GET /api/{cadets,suppliers,catalog,variants,purchase-orders}` returns up to 25 `records` and a `nextCursor`. Use `q` for search and `after` for the next page. Append `/ID` to get an individual `record`. Register lists support `active=1` for pickers. Catalog and variants support `supplierId`, and variants also support `itemId`.
 - `POST /api/{cadets,suppliers,catalog,variants}` creates a record. Append `/ID` to update one. Writes require an administrator and use the fields in the corresponding register.
@@ -209,7 +221,8 @@ The unused Express/MySQL backend and its duplicate dependency manifests have bee
 - main.jsx and App.css: React interface and styling.
 - templates.jsx: Dashboard and navigation definitions.
 - registers.jsx, purchase-orders.jsx and management-ui.jsx: live register and purchase-order screens and shared search and picker components.
-- users.jsx: live administrator account listing, pagination and account creation.
+- users.jsx and account-admin.js support administrator account listing, creation, editing, resets and access controls.
+- settings.jsx and branding.js support administrator branding and the public image endpoints.
 - staff.jsx: live staff profile listing and creation with new or existing login accounts.
 - worker.js and management.js: authentication, D1 initialization and operational API handlers.
 - inventory.js and inventory-schema.js: receipt, back-order, stock and correction APIs and storage.

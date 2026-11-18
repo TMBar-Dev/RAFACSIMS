@@ -41,10 +41,10 @@ This checklist turns the [V1 design](DESIGN.md) into implementation steps. Start
 
 ## 6. Finish account administration and branding
 
-- [ ] Add administrator username and role edits and an explicit password reset flow. Staff account entry remains **Username, Password, Role**, and new or reset credentials must follow the agreed first-login and session rules.
-- [ ] Define account deactivation or removal, session revocation, attribution for past actions and last-administrator protection before enabling removal.
-- [ ] Add system name, short name and About Us settings. Confirm where About Us appears. Configure the approved image storage binding and add verified logo and cover uploads with previews.
-- [ ] Verify admin-only access, password reset and session behaviour, and that a failed image upload leaves the previously saved image available.
+- [x] Add administrator username and role edits and a temporary password reset that revokes prior sessions and requires a password change. Keep Staff Accounts entry to **Username, Password, Role**.
+- [x] Add reversible account deactivation with session revocation, preserved operational attribution and last-administrator protection.
+- [x] Add system and short names, dashboard About Us, and validated logo and sign-in cover uploads with previews. Store both images in the existing D1 binding.
+- [x] Verify administrator access, password resets, session revocation and image replacement failures in isolated tests.
 
 ## 7. Reconcile data and verify release
 

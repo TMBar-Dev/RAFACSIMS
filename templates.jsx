@@ -2,6 +2,7 @@ import React from 'react';
 import { Button, Card, Typography } from '@material-ui/core';
 import { PurchaseOrderSummary } from './purchase-orders.jsx';
 import { BackOrderSummary } from './inventory-pages.jsx';
+import { useResource } from './management-ui.jsx';
 
 // One registry keeps navigation, headings and direct hash links consistent.
 export const PAGES = {
@@ -54,7 +55,12 @@ export const PAGES = {
   },
   users: {
     title: 'User Management',
-    description: 'Create sign-in accounts and review first-login password status.',
+    description: 'Manage sign-in accounts, roles and password resets.',
+    adminOnly: true
+  },
+  settings: {
+    title: 'Settings',
+    description: 'Update the system name, logo, cover and About Us.',
     adminOnly: true
   }
 };
@@ -84,6 +90,7 @@ export function visiblePages(user, canOperate) {
 
 export function Dashboard({ user, canOperate, request }) {
   const modules = visiblePages(user, canOperate).filter(([key]) => key !== 'dashboard');
+  const about = useResource(request, 'about')?.data?.aboutUs;
   return (
     <>
       <header className="page-heading">
@@ -106,6 +113,10 @@ export function Dashboard({ user, canOperate, request }) {
           </Card>
         ))}
       </div>}
+      {about && <Card className="workspace-card" variant="outlined">
+        <Typography variant="h6" component="h2">About Us</Typography>
+        <p className="about-copy">{about}</p>
+      </Card>}
       <Card className="workspace-card" variant="outlined">
         <Typography variant="h6" component="h2">Your account</Typography>
         <dl className="account-details">

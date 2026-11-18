@@ -249,7 +249,7 @@ test('Staff Accounts and operational workflows', async t => {
     const keys = ['account', 'id'];
     for (const row of rows) {
       assert.deepEqual(Object.keys(row).sort(), keys);
-      if (row.account) assert.deepEqual(Object.keys(row.account).sort(), ['id', 'username', 'role', 'mustChangePassword'].sort());
+      if (row.account) assert.deepEqual(Object.keys(row.account).sort(), ['active', 'id', 'username', 'role', 'mustChangePassword'].sort());
     }
     for (const after of ['-1', 'invalid', '9007199254740992']) {
       assert.equal((await request(`staff?after=${after}`, { cookie: adminCookie })).status, 400);

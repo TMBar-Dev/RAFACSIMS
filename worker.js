@@ -3,6 +3,11 @@
 import { MANAGEMENT_SCHEMA } from './schema.js';
 import { fail, managementRoute, readManagement, writeManagement } from './management.js';
 import { inventoryRoute, readInventory, writeInventory } from './inventory.js';
+import { ACCOUNT_ACTIVE, ACCOUNT_ADMIN_SCHEMA, administerAccount } from './account-admin.js';
+import {
+  BRANDING_SCHEMA, brandingBodyLimit, brandingImageSlot, readAbout, readBranding, readBrandingUpload,
+  saveBranding, saveBrandingImage, serveBrandingImage
+} from './branding.js';
 
 const encoder = new TextEncoder();
 // Keep this compatible with stored PBKDF2 records and the Workers runtime.
@@ -38,6 +43,8 @@ async function initialize(db) {
     db.prepare(`CREATE TABLE IF NOT EXISTS rate_limits (
       bucket TEXT PRIMARY KEY, hits INTEGER NOT NULL, expires_at INTEGER NOT NULL
     )`),
+    ...ACCOUNT_ADMIN_SCHEMA.map(statement => db.prepare(statement)),
+    ...BRANDING_SCHEMA.map(statement => db.prepare(statement)),
     // Add the management tables without changing existing authentication
     // records. Staff profiles can link to accounts through user_id.
     ...MANAGEMENT_SCHEMA.map(statement => db.prepare(statement)),
@@ -92,7 +99,7 @@ function publicUser(user) {
 function publicStaff(row) {
   return {
     id: row.id,
-    account: row.account_id === null ? null : { id: row.account_id, ...publicUser(row) }
+    account: row.account_id === null ? null : { id: row.account_id, ...publicUser(row), active: Boolean(row.active) }
   };
 }
 // Existing D1 tables require nonempty name columns. Fixed markers keep staff
@@ -125,14 +132,19 @@ async function currentSession(request, db) {
     .find(v => v.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
   return db.prepare(`SELECT users.*, sessions.token_hash FROM sessions
-    JOIN users ON users.id = sessions.user_id WHERE token_hash = ? AND expires_at > ?`)
+    JOIN users ON users.id = sessions.user_id WHERE token_hash = ? AND expires_at > ? AND ${ACCOUNT_ACTIVE}`)
     .bind(await digest(token), Math.floor(Date.now() / 1000)).first();
 }
-async function issueSession(db, userId) {
-  // Expiry is enforced in D1 lookups as well as by the browser cookie lifetime.
+async function issueSession(db, user) {
   const token = randomToken();
-  await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
-    .bind(await digest(token), userId, Math.floor(Date.now() / 1000) + SESSION_SECONDS).run();
+  // Compare the verified account state at insertion so a concurrent password
+  // reset, deactivation or identity edit cannot create a stale session.
+  const result = await db.prepare(`INSERT INTO sessions (token_hash, user_id, expires_at)
+    SELECT ?, id, ? FROM users WHERE id = ? AND password_hash = ? AND username COLLATE BINARY = ?
+      AND role = ? AND must_change_password = ? AND ${ACCOUNT_ACTIVE}`)
+    .bind(await digest(token), Math.floor(Date.now() / 1000) + SESSION_SECONDS,
+      user.id, user.password_hash, user.username, user.role, user.must_change_password).run();
+  if (!result.meta.changes) fail('Incorrect username or password.', 401);
   return token;
 }
 
@@ -141,6 +153,8 @@ async function api(request, env) {
   const path = url.pathname;
   const management = managementRoute(path);
   const inventory = inventoryRoute(path);
+  const imageSlot = brandingImageSlot(path);
+  const accountAction = /^\/api\/users\/(\d+)\/(edit|reset-password|deactivate|reactivate)$/.exec(path);
   if (!['GET', 'POST'].includes(request.method)) return json({ message: 'Method not allowed.' }, 405, { Allow: 'GET, POST' });
   if (request.method === 'POST') {
     // State changes accept only same-origin JSON requests. Browser fetch sets
@@ -150,6 +164,18 @@ async function api(request, env) {
   }
   if (!env.DB) fail('Database binding DB is not configured.', 503);
   await initialize(env.DB);
+  if (request.method === 'GET') {
+    if (path === '/api/branding') return json(await readBranding(env.DB));
+    if (imageSlot) return serveBrandingImage(env.DB, imageSlot);
+    if (path === '/api/settings') {
+      requireAdministrator(await currentSession(request, env.DB));
+      return json(await readBranding(env.DB, true));
+    }
+    if (path === '/api/about') {
+      requireReadySession(await currentSession(request, env.DB));
+      return json(await readAbout(env.DB));
+    }
+  }
   if (request.method === 'GET' && path === '/api/session') {
     // Signed-out users get null, allowing the frontend to restore state on load.
     const user = await currentSession(request, env.DB);
@@ -176,11 +202,12 @@ async function api(request, env) {
     // extra row to detect another page without returning an unbounded user list.
     const cursor = new URL(request.url).searchParams.get('after') ?? '0';
     if (!/^\d{1,16}$/.test(cursor) || !Number.isSafeInteger(Number(cursor))) fail('Invalid user-list cursor.');
-    const result = await env.DB.prepare(`SELECT id, username, role, must_change_password, created_at
+    const result = await env.DB.prepare(`SELECT id, username, role, must_change_password, created_at, (${ACCOUNT_ACTIVE}) AS active
       FROM users WHERE id > ? ORDER BY id ASC LIMIT 26`).bind(Number(cursor)).all();
     const users = result.results.slice(0, 25).map(row => ({
       id: row.id,
       ...publicUser(row),
+      active: Boolean(row.active),
       createdAt: row.created_at
     }));
     // Only the explicitly selected public fields leave the Worker. Password
@@ -193,16 +220,23 @@ async function api(request, env) {
     if (!/^\d{1,16}$/.test(cursor) || !Number.isSafeInteger(Number(cursor))) fail('Invalid staff-list cursor.');
     // LEFT JOIN retains existing profiles without a login. Authorization uses
     // the requesting administrator's current session, never a listed role.
-    const result = await env.DB.prepare(`SELECT s.id, u.id AS account_id, u.username, u.role, u.must_change_password
-      FROM staff s LEFT JOIN users u ON u.id = s.user_id
+    const result = await env.DB.prepare(`SELECT s.id, users.id AS account_id, users.username, users.role,
+      users.must_change_password, (${ACCOUNT_ACTIVE}) AS active
+      FROM staff s LEFT JOIN users ON users.id = s.user_id
       WHERE s.id > ? ORDER BY s.id ASC LIMIT 26`).bind(Number(cursor)).all();
     const staff = result.results.slice(0, 25).map(publicStaff);
     return json({ staff, nextCursor: result.results.length > 25 ? staff[staff.length - 1].id : null });
   }
   if (request.method !== 'POST') return json({ message: 'Not found.' }, 404);
-  const bodyLimit = management || inventory ? 16384 : 4096;
+  let uploadActor;
+  if (imageSlot) {
+    // Authenticate before buffering the larger image body.
+    uploadActor = await currentSession(request, env.DB);
+    requireAdministrator(uploadActor);
+  }
+  const bodyLimit = imageSlot ? brandingBodyLimit(imageSlot) : management || inventory || path === '/api/settings' ? 16384 : 4096;
   if (Number(request.headers.get('Content-Length')) > bodyLimit) fail('Request too large.', 413);
-  const text = await request.text();
+  const text = imageSlot ? await readBrandingUpload(request, bodyLimit) : await request.text();
   if (text.length > bodyLimit) fail('Request too large.', 413);
   let body;
   try { body = JSON.parse(text); } catch { fail('Invalid JSON.'); }
@@ -212,7 +246,8 @@ async function api(request, env) {
   // consumes the existing sign-in and account maintenance budget.
   const now = Math.floor(Date.now() / 1000);
   const rateKey = `${request.headers.get('CF-Connecting-IP') || 'local'}:${Math.floor(now / 60)}`;
-  const bucket = await digest(management || inventory ? `management:${rateKey}` : rateKey);
+  const bucket = await digest(management || inventory || imageSlot || accountAction || path === '/api/settings'
+    ? `management:${rateKey}` : rateKey);
   const limits = await env.DB.batch([
     env.DB.prepare(`INSERT INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, ?)
       ON CONFLICT(bucket) DO UPDATE SET hits = hits + 1 RETURNING hits`).bind(bucket, now + 120),
@@ -235,16 +270,16 @@ async function api(request, env) {
   }
   if (path === '/api/login') {
     if (typeof body.username !== 'string' || typeof body.password !== 'string' || body.password.length > 128) fail('Incorrect username or password.', 401);
-    const user = await env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(body.username.trim()).first();
+    const user = await env.DB.prepare(`SELECT * FROM users WHERE username = ? AND ${ACCOUNT_ACTIVE}`).bind(body.username.trim()).first();
     // Do the same password work when an account does not exist.
     const valid = await verifyPassword(body.password, user?.password_hash || ADMIN_HASH);
     if (!user || !valid) fail('Incorrect username or password.', 401);
-    const token = await issueSession(env.DB, user.id);
+    const token = await issueSession(env.DB, user);
     await env.DB.prepare('DELETE FROM sessions WHERE expires_at <= ?').bind(Math.floor(Date.now() / 1000)).run();
     return json({ user: publicUser(user) }, 200, { 'Set-Cookie': cookie(token) });
   }
 
-  const user = await currentSession(request, env.DB);
+  const user = uploadActor ?? await currentSession(request, env.DB);
   if (!user) fail('Please log in.', 401);
   // These maintenance actions remain available during mandatory password reset.
   if (path === '/api/logout') {
@@ -261,19 +296,30 @@ async function api(request, env) {
     // D1 executes this batch transactionally. Guard against concurrent changes
     // using a stale password, revoke all old sessions and issue one fresh token.
     const results = await env.DB.batch([
-      env.DB.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ? AND password_hash = ?')
-        .bind(hash, user.id, user.password_hash),
+      env.DB.prepare(`UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ? AND password_hash = ?
+        AND ${ACCOUNT_ACTIVE} AND EXISTS (SELECT 1 FROM sessions WHERE token_hash = ? AND user_id = users.id AND expires_at > unixepoch())`)
+        .bind(hash, user.id, user.password_hash, user.token_hash),
       env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND EXISTS (SELECT 1 FROM users WHERE id = ? AND password_hash = ?)')
         .bind(user.id, user.id, hash),
       env.DB.prepare(`INSERT INTO sessions (token_hash, user_id, expires_at)
         SELECT ?, id, ? FROM users WHERE id = ? AND password_hash = ?`)
         .bind(await digest(token), Math.floor(Date.now() / 1000) + SESSION_SECONDS, user.id, hash)
     ]);
-    if (!results[0].meta.changes) fail('Your password has changed. Please log in again.', 409);
+    if (!results[0].meta.changes) fail('Your password or session changed. Please log in again.', 409);
     return json({ user: { ...publicUser(user), mustChangePassword: false } }, 200, { 'Set-Cookie': cookie(token) });
   }
   // All future protected endpoints must sit behind this gate.
   if (user.must_change_password) fail('Change your password before continuing.', 403);
+  if (imageSlot || path === '/api/settings' || accountAction) {
+    requireAdministrator(user);
+    if (imageSlot) return json(await saveBrandingImage(env.DB, user, imageSlot, body));
+    if (path === '/api/settings') return json(await saveBranding(env.DB, user, body));
+    return json(await administerAccount(env.DB, user, accountAction[1], accountAction[2], body, async (password, existing) => {
+      validatePassword(password);
+      if (await verifyPassword(password, existing)) fail('Choose a temporary password different from the current password.');
+      return hashPassword(password);
+    }));
+  }
   if (inventory) {
     if (inventory.action || inventory.resource === 'opening-balances') requireAdministrator(user);
     else await requireOperationalAccess(user, env.DB);
