@@ -74,7 +74,59 @@ export const MANAGEMENT_SCHEMA = [
   'CREATE INDEX IF NOT EXISTS orders_cadet_id ON orders(cadet_id)',
   'CREATE INDEX IF NOT EXISTS orders_staff_id ON orders(staff_id)',
   'CREATE INDEX IF NOT EXISTS orders_created_by_user_id ON orders(created_by_user_id)',
-  'CREATE INDEX IF NOT EXISTS orders_status_created_at ON orders(status, created_at)'
+  'CREATE INDEX IF NOT EXISTS orders_status_created_at ON orders(status, created_at)',
+  // Purchase orders use their own tables so the original stock and order
+  // records remain available for reconciliation when receiving is added.
+  `CREATE TABLE IF NOT EXISTS suppliers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL COLLATE NOCASE UNIQUE CHECK(length(trim(name)) > 0),
+    address TEXT NOT NULL DEFAULT '',
+    contact_person TEXT NOT NULL DEFAULT '',
+    contact_number TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK(status IN ('active', 'inactive'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS catalog_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+    name TEXT NOT NULL COLLATE NOCASE CHECK(length(trim(name)) > 0),
+    description TEXT NOT NULL DEFAULT '',
+    uniform_type TEXT NOT NULL CHECK(uniform_type IN ('blue', 'green')),
+    status TEXT NOT NULL CHECK(status IN ('active', 'inactive')),
+    UNIQUE(supplier_id, name)
+  )`,
+  `CREATE TABLE IF NOT EXISTS catalog_variants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL REFERENCES catalog_items(id),
+    size TEXT NOT NULL COLLATE NOCASE CHECK(length(trim(size)) > 0),
+    status TEXT NOT NULL CHECK(status IN ('active', 'inactive')),
+    UNIQUE(item_id, size)
+  )`,
+  `CREATE TABLE IF NOT EXISTS purchase_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT GENERATED ALWAYS AS ('PO-' || printf('%04d', id)) STORED UNIQUE,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+    supplier_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'partial', 'received')),
+    notes TEXT NOT NULL DEFAULT '',
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    version INTEGER NOT NULL DEFAULT 1,
+    creation_key TEXT NOT NULL UNIQUE,
+    write_token TEXT NOT NULL UNIQUE
+  )`,
+  `CREATE TABLE IF NOT EXISTS purchase_order_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL REFERENCES purchase_orders(id),
+    variant_id INTEGER NOT NULL REFERENCES catalog_variants(id),
+    item_name TEXT NOT NULL,
+    size TEXT NOT NULL,
+    quantity INTEGER NOT NULL CHECK(typeof(quantity) = 'integer' AND quantity BETWEEN 1 AND 1000000),
+    UNIQUE(order_id, variant_id)
+  )`,
+  'CREATE INDEX IF NOT EXISTS purchase_orders_status ON purchase_orders(status)',
+  'CREATE INDEX IF NOT EXISTS purchase_orders_supplier ON purchase_orders(supplier_id)',
+  'CREATE INDEX IF NOT EXISTS purchase_order_lines_variant ON purchase_order_lines(variant_id)'
 ];
 
 // updated_at is initialized on insert. Future write endpoints must update it

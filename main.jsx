@@ -4,9 +4,11 @@ import './App.css';
 import '@fontsource/roboto/400.css';
 import '@fontsource/roboto/500.css';
 import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@material-ui/core';
-import { Dashboard, ManagementTemplate, PAGES, pageHref, readPageHash, visiblePages } from './templates.jsx';
+import { Dashboard, ManagementTemplate, PAGES, canViewPage, pageHref, readPageHash, visiblePages } from './templates.jsx';
 import UserManagement from './users.jsx';
 import StaffAccounts from './staff.jsx';
+import RegisterPage from './registers.jsx';
+import PurchaseOrders from './purchase-orders.jsx';
 
 // The interface and API share an origin. The browser sends the HttpOnly session
 // cookie automatically; JavaScript never needs to read or store its token.
@@ -18,13 +20,14 @@ async function api(path, body) {
     body: JSON.stringify(body)
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.message || 'Request failed.');
+  if (!response.ok) throw Object.assign(new Error(data.message || 'Request failed.'), { status: response.status });
   return data;
 }
 
 function App() {
   // `user` contains only the public account fields returned by worker.js.
   const [user, setUser] = useState(null);
+  const [operationalAccess, setOperationalAccess] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -46,6 +49,21 @@ function App() {
     window.addEventListener('hashchange', handleNavigation);
     return () => window.removeEventListener('hashchange', handleNavigation);
   }, []);
+
+  // Resolve workspace access separately so an access-check failure leaves
+  // account features available. Ignore responses for a replaced session.
+  useEffect(() => {
+    if (!user || user.mustChangePassword) return;
+    let active = true;
+    api('operations/access')
+      .then(({ canOperate }) => {
+        if (active) setOperationalAccess({ user, allowed: canOperate === true });
+      })
+      .catch(error => {
+        if (active) setOperationalAccess({ user, allowed: false, error: error.status === 403 ? '' : error.message });
+      });
+    return () => { active = false; };
+  }, [user]);
 
   // Restore the existing session once at startup. Ignore a response arriving
   // after unmount instead of updating a component that is no longer active.
@@ -108,14 +126,17 @@ function App() {
   // first-login restriction, so hiding this form cannot bypass it.
   const mustChange = user && (user.mustChangePassword || changingPassword);
   const showWorkspace = !loading && user && !mustChange;
-  // This controls navigation visibility. Administrator APIs in worker.js also
-  // enforce the live session, role and completed first-login password change.
-  const canViewPage = !PAGES[page].adminOnly || user?.role === 'admin';
+  const currentPage = PAGES[page];
+  const access = operationalAccess?.user === user ? operationalAccess : null;
+  const canOperate = access?.allowed === true;
+  const accessHeading = currentPage.adminOnly
+    ? 'Administrator access required'
+    : access?.error ? 'Workspace access unavailable' : 'Staff access required';
 
   // Account forms keep their original handlers. Only the old signed-in welcome
   // panel is expanded into a navigable workspace; protected pages mount last.
   return (
-    <div className="App">
+    <div className={showWorkspace && page === 'orders' ? 'App orders-page' : 'App'}>
       <AppBar position="static"><Toolbar className="app-toolbar">
         <Typography variant="h6">RAFACSIMS</Typography>
         {user && <div className="account-controls">
@@ -131,26 +152,30 @@ function App() {
             <aside className="workspace-sidebar">
               <p className="eyebrow">Workspace</p>
               <nav aria-label="Main navigation">
-                {visiblePages(user).map(([key, item]) => (
+                {visiblePages(user, canOperate).map(([key, item]) => (
                   <a key={key} href={pageHref(key)} aria-current={page === key ? 'page' : undefined}>
                     {item.title}
                   </a>
                 ))}
               </nav>
-              <p className="sidebar-note">Cadets and stock are templates. Staff and login accounts are managed by administrators.</p>
             </aside>
             <section className="workspace-content" aria-label="Page content">
               {message && <p className="message-banner" role="status" aria-live="polite">{message}</p>}
-              {!canViewPage ? (
+              {access?.error && <p className="error-message" role="alert">Workspace access check failed. {access.error}</p>}
+              {currentPage.operational && !access ? (
+                <p role="status">Checking workspace access…</p>
+              ) : !canViewPage(currentPage, user, canOperate) ? (
                 <Card className="workspace-card" variant="outlined">
-                  <Typography variant="h5" component="h1">Administrator access required</Typography>
-                  <p>{PAGES[page].title} is available to administrators.</p>
+                  <Typography variant="h5" component="h1">{accessHeading}</Typography>
+                  {currentPage.operational && !access?.error && <p>Ask an administrator to link your login to Staff Accounts.</p>}
                   <Button component="a" href={pageHref('dashboard')} color="primary">Return to Dashboard</Button>
                 </Card>
-              ) : page === 'dashboard' ? <Dashboard user={user} />
+              ) : page === 'dashboard' ? <Dashboard user={user} canOperate={canOperate} request={api} />
                 : page === 'users' ? <UserManagement request={api} currentUser={user} />
                   : page === 'staff' ? <StaffAccounts request={api} currentUser={user} />
-                  : <ManagementTemplate key={page} pageKey={page} />}
+                    : page === 'orders' ? <PurchaseOrders request={api} />
+                      : page === 'stock' ? <ManagementTemplate pageKey={page} />
+                        : <RegisterPage key={page} request={api} resource={page} canEdit={user.role === 'admin'} />}
             </section>
           </div>
         ) : (

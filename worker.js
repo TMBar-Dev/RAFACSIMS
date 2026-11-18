@@ -1,6 +1,7 @@
 // Cloudflare Worker entry point: API requests use D1; other requests serve the
 // generated frontend through ASSETS. Never serve the repository root itself.
 import { MANAGEMENT_SCHEMA } from './schema.js';
+import { fail, managementRoute, readManagement, writeManagement } from './management.js';
 
 const encoder = new TextEncoder();
 // Keep this compatible with stored PBKDF2 records and the Workers runtime.
@@ -56,9 +57,6 @@ function json(body, status = 200, headers = {}) {
   // Session and account responses must not be reused by browser/CDN caches.
   return Response.json(body, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
 }
-function fail(message, status = 400) {
-  throw Object.assign(new Error(message), { status });
-}
 function hex(bytes) {
   return Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('');
 }
@@ -100,12 +98,21 @@ function publicStaff(row) {
 // IDs and order references intact while allowing links without personal data.
 const INSERT_STAFF_LINK = `INSERT INTO staff (user_id, first_name, last_name)
   SELECT id, '-', '-' FROM users WHERE username = ?`;
-function requireAdministrator(user) {
-  // Use the current D1 user row from the session lookup, never a browser-supplied
-  // role. A first-login password change is required before account management.
+function requireReadySession(user) {
   if (!user) fail('Please log in.', 401);
   if (user.must_change_password) fail('Change your password before continuing.', 403);
+}
+function requireAdministrator(user) {
+  requireReadySession(user);
   if (user.role !== 'admin') fail('Administrator access is required.', 403);
+}
+async function requireOperationalAccess(user, db) {
+  requireReadySession(user);
+  if (user.role === 'admin') return;
+  // Linking is an explicit grant by an administrator. Check D1 on each
+  // protected request so an existing session reflects changes to that link.
+  const link = await db.prepare('SELECT 1 FROM staff WHERE user_id = ?').bind(user.id).first();
+  if (!link) fail('Staff access is required.', 403);
 }
 function cookie(token, seconds = SESSION_SECONDS) {
   return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${seconds}`;
@@ -129,7 +136,9 @@ async function issueSession(db, userId) {
 }
 
 async function api(request, env) {
-  const path = new URL(request.url).pathname;
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const management = managementRoute(path);
   if (!['GET', 'POST'].includes(request.method)) return json({ message: 'Method not allowed.' }, 405, { Allow: 'GET, POST' });
   if (request.method === 'POST') {
     // State changes accept only same-origin JSON requests. Browser fetch sets
@@ -143,6 +152,15 @@ async function api(request, env) {
     // Signed-out users get null, allowing the frontend to restore state on load.
     const user = await currentSession(request, env.DB);
     return json({ user: user ? publicUser(user) : null });
+  }
+  if (request.method === 'GET' && path === '/api/operations/access') {
+    await requireOperationalAccess(await currentSession(request, env.DB), env.DB);
+    return json({ canOperate: true });
+  }
+  if (request.method === 'GET' && management) {
+    const user = await currentSession(request, env.DB);
+    await requireOperationalAccess(user, env.DB);
+    return json(await readManagement(env.DB, management, url, user));
   }
   if (request.method === 'GET' && path === '/api/users') {
     requireAdministrator(await currentSession(request, env.DB));
@@ -174,16 +192,19 @@ async function api(request, env) {
     return json({ staff, nextCursor: result.results.length > 25 ? staff[staff.length - 1].id : null });
   }
   if (request.method !== 'POST') return json({ message: 'Not found.' }, 404);
-  if (Number(request.headers.get('Content-Length')) > 4096) fail('Request too large.', 413);
+  const bodyLimit = management ? 16384 : 4096;
+  if (Number(request.headers.get('Content-Length')) > bodyLimit) fail('Request too large.', 413);
   const text = await request.text();
-  if (text.length > 4096) fail('Request too large.', 413);
+  if (text.length > bodyLimit) fail('Request too large.', 413);
   let body;
   try { body = JSON.parse(text); } catch { fail('Invalid JSON.'); }
   if (!body || typeof body !== 'object' || Array.isArray(body)) fail('Invalid request.');
 
-  // Cloudflare provides CF-Connecting-IP; all auth writes share a 20/minute budget.
+  // Keep management writes in a separate bucket so editing records never
+  // consumes the existing sign-in and account maintenance budget.
   const now = Math.floor(Date.now() / 1000);
-  const bucket = await digest(`${request.headers.get('CF-Connecting-IP') || 'local'}:${Math.floor(now / 60)}`);
+  const rateKey = `${request.headers.get('CF-Connecting-IP') || 'local'}:${Math.floor(now / 60)}`;
+  const bucket = await digest(management ? `management:${rateKey}` : rateKey);
   const limits = await env.DB.batch([
     env.DB.prepare(`INSERT INTO rate_limits (bucket, hits, expires_at) VALUES (?, 1, ?)
       ON CONFLICT(bucket) DO UPDATE SET hits = hits + 1 RETURNING hits`).bind(bucket, now + 120),
@@ -245,6 +266,12 @@ async function api(request, env) {
   }
   // All future protected endpoints must sit behind this gate.
   if (user.must_change_password) fail('Change your password before continuing.', 403);
+  if (management) {
+    if (management.detail === 'summary') return json({ message: 'Method not allowed.' }, 405, { Allow: 'GET' });
+    if (management.resource === 'purchase-orders') await requireOperationalAccess(user, env.DB);
+    else requireAdministrator(user);
+    return json(await writeManagement(env.DB, management, body, user), management.detail ? 200 : 201);
+  }
   if (path === '/api/staff') {
     requireAdministrator(user);
     const accountMode = body.accountMode === undefined ? 'create' : body.accountMode;

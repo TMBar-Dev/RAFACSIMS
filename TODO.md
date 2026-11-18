@@ -4,24 +4,24 @@ This checklist turns the [V1 design](DESIGN.md) into implementation steps. Start
 
 ## 1. Establish operational access
 
-- [ ] Add a Worker authorization check for a live administrator or an ordinary user linked through Staff Accounts. Keep maintenance, account administration and settings administrator-only. Apply the existing mandatory password-change gate to business requests.
-- [ ] Expose only the access information the frontend needs. Use it for navigation and direct-route handling. Keep the Worker as the authority for every business request.
-- [ ] Verify access for an administrator, linked staff user, unlinked user, signed-out visitor and account awaiting a mandatory password change. Check that linking an account preserves its credentials and session behaviour.
+- [x] Add a Worker authorization check for a live administrator or an ordinary user linked through Staff Accounts. Keep account administration administrator-only and require a completed first-login password change. Apply these gates to maintenance, settings and business endpoints as they are added.
+- [x] Expose only the access information the frontend needs. Use it for navigation and direct-route handling. Keep the Worker as the authority for every business request.
+- [x] Verify Worker access for an administrator, linked staff user, unlinked user, signed-out visitor and account awaiting a mandatory password change. Check that linking an account preserves its credentials and existing session.
 
 ## 2. Build the cadet, supplier and catalog registers
 
-- [ ] Connect the Cadets screen to the existing D1 table. Add searchable lists, detail, create and edit, and support inactive and left statuses. Confirm the CIN mapping before importing V1 recipients.
-- [ ] Add the supplier register with name, address, contact details and active status. Enforce unique supplier names and preserve references to inactive suppliers.
-- [ ] Add supplier-linked catalog items and size variants. Support name, description, Blue/Green type, active status and unique item names within each supplier.
-- [ ] Add pickers for active records. Allow staff to read the choices needed for operations. Apply administrator-only writes to the registers under the proposed access model in the design.
-- [ ] Verify that duplicate records are rejected, inactive records disappear from new picks and existing references still resolve.
+- [x] Connect the Cadets screen to the existing D1 table. Add searchable lists, detail, create and edit, and support inactive and left statuses.
+- [x] Add the supplier register with name, address, contact details and active status. Enforce unique supplier names and preserve references to inactive suppliers.
+- [x] Add supplier-linked catalog items and size variants. Support name, description, Blue/Green type, active status and unique item names within each supplier.
+- [x] Add active supplier and variant pickers for purchase orders. Make active cadets available for the future uniform issue picker. Allow staff to read active records and restrict register writes to administrators.
+- [x] Verify in isolated API tests that duplicate records are rejected, inactive records disappear from new picks and existing references still resolve.
 
 ## 3. Build purchase orders
 
-- [ ] Add purchase-order headers and lines with an additive D1 migration. Keep the existing stock and order rows available for reconciliation.
-- [ ] Add the Orders list, editor and detail view. Filter item choices by supplier, validate positive whole-unit quantities and save the header and all lines together with a unique PO reference.
-- [ ] Add printable order details and dashboard counts as each data source becomes available. Show order line counts separately from unit quantities.
-- [ ] Verify that a multi-size order saves as Pending, a failed save leaves no partial order, and creating an order leaves stock unchanged.
+- [x] Add purchase-order headers and lines through additive D1 initialization. Keep the existing stock and order rows available for reconciliation.
+- [x] Add the Orders list, editor and detail view. Filter item choices by supplier, validate positive whole-unit quantities and save the header and all lines together with a unique PO reference.
+- [x] Add printable order details and the pending-order dashboard count. Show order line counts separately from unit quantities.
+- [x] Verify in isolated API tests that a multi-size order saves as Pending, a failed save leaves no partial order, and creating an order leaves stock unchanged.
 
 ## 4. Add receiving, back orders and stock balances
 
@@ -48,7 +48,8 @@ This checklist turns the [V1 design](DESIGN.md) into implementation steps. Start
 
 ## 7. Reconcile data and verify release
 
-- [ ] Confirm whether to import V1 data and whether routine CSV import or export is required. For an approved V1 import, rehearse on isolated data and reconcile recipient links, size-level balances, open PO/BO quantities and source references before touching production.
+- [ ] Confirm whether to import V1 data and whether routine CSV import or export is required. For an approved V1 import, confirm the CIN mapping and rehearse on isolated data. Reconcile recipient links, size-level balances, open PO/BO quantities and source references before touching production.
 - [ ] Review each changed or moved file against Git, including imports, API contracts, auth, D1 bindings and build paths. Preserve the production D1 ID and keep V1 data and configuration out of staging and published assets.
 - [ ] Run isolated checks for each changed workflow as appropriate. Keep source review, dependency audit, Cloudflare build and browser verification distinct. Leave build verification to Cloudflare under the current project instructions.
 - [ ] Obtain explicit approval for each GitHub push. After deployment, exercise the full order-to-issue flow and access restrictions with test accounts in the browser. Verify that hosting serves only `build/` and allowed public assets.
+- [ ] In the deployed browser, also verify register edits, order pickers, the dashboard order count and purchase-order print output.

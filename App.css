@@ -69,6 +69,23 @@ main { padding: 32px 16px; }
 /* Keep captions accessible without showing a second copy above each table. */
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .workspace a:focus-visible, .table-scroll:focus-visible { outline: 3px solid #426b96; outline-offset: 3px; }
+.record-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.record-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 16px 0; }
+.record-picker { max-width: 520px; }
+.order-line-picker { margin: 18px 0; }
+.order-remarks.MuiTextField-root { margin-top: 20px; }
+.order-notes p { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media print {
+  .orders-page { background: white; }
+  .orders-page .MuiAppBar-root, .orders-page .workspace-sidebar, .orders-page .screen-only { display: none; }
+  .orders-page .workspace { padding: 0; background: white; min-height: 0; color: black; }
+  .orders-page .workspace-shell { display: block; }
+  .orders-page .workspace-content > :not(.purchase-print) { display: none; }
+  .orders-page .purchase-print { border: 0; padding: 0; overflow: visible; }
+  .orders-page .table-scroll { overflow: visible; }
+  .orders-page .records-table tr { break-inside: avoid; }
+}
 
 @media (max-width: 1050px) {
   .module-grid { grid-template-columns: 1fr; }

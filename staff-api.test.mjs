@@ -55,7 +55,7 @@ class TestD1 {
   }
 }
 
-test('Staff Accounts creates linked logins without changing existing accounts', async t => {
+test('Staff Accounts and operational workflows', async t => {
   const DB = new TestD1();
   t.after(() => DB.database.close());
   let importNumber = 0;
@@ -84,10 +84,14 @@ test('Staff Accounts creates linked logins without changing existing accounts', 
 
   await t.test('requires a changed administrator password and includes the existing admin link', async () => {
     assert.equal((await request('staff')).status, 401);
+    assert.equal((await request('operations/access')).status, 401);
     assert.equal((await request('staff', { body: credentials })).status, 401);
     const initial = await request('login', { body: { username: 'admin', password: 'RAFACSIMS' } });
     assert.equal(initial.status, 200);
     assert.equal((await request('staff', { cookie: initial.cookie })).status, 403);
+    assert.deepEqual(await request('operations/access', { cookie: initial.cookie }), {
+      status: 403, data: { message: 'Change your password before continuing.' }, cookie: undefined
+    });
     assert.equal((await request('staff', { cookie: initial.cookie, body: credentials })).status, 403);
     const changed = await request('change-password', { cookie: initial.cookie,
       body: { currentPassword: 'RAFACSIMS', newPassword: 'ChangedAdmin!123' } });
@@ -145,6 +149,8 @@ test('Staff Accounts creates linked logins without changing existing accounts', 
     assert.equal(changed.status, 200);
     assert.equal(changed.data.user.mustChangePassword, false);
     assert.equal((await request('session', { cookie: login.cookie })).data.user, null);
+    assert.equal((await request('operations/access', { cookie: login.cookie })).status, 401);
+    assert.equal((await request('operations/access', { cookie: changed.cookie })).status, 200);
     assert.equal((await request('login', { body: { username: credentials.username, password: credentials.password } })).status, 401);
     assert.equal((await request('login', { body: { username: credentials.username, password: 'ReplacementStaff!456' } })).status, 200);
 
@@ -168,6 +174,35 @@ test('Staff Accounts creates linked logins without changing existing accounts', 
     assert.equal((await request('login', { body: { username: 'existing.login', password: 'ExistingLogin!123' } })).status, 200);
     assert.equal((await request('staff', { cookie: adminCookie, body })).status, 409);
     assert.equal((await request('staff', { cookie: adminCookie, body: { ...body, username: 'missing.account' } })).status, 404);
+  });
+
+  await t.test('operational access follows live roles and staff links without replacing sessions', async () => {
+    const access = cookie => request('operations/access', { cookie });
+    const adminId = DB.database.prepare("SELECT id FROM users WHERE username = 'admin'").get().id;
+    const adminLink = DB.database.prepare('SELECT id FROM staff WHERE user_id = ?').get(adminId);
+    const setLink = DB.database.prepare('UPDATE staff SET user_id = ? WHERE id = ?');
+    setLink.run(null, adminLink.id);
+    assert.equal((await access(adminCookie)).status, 200);
+    setLink.run(adminId, adminLink.id);
+
+    const ordinary = await request('login', { body: { username: 'ordinary', password: 'OrdinaryPass!123' } });
+    const before = DB.database.prepare("SELECT * FROM users WHERE username = 'ordinary'").get();
+    assert.equal((await access(ordinary.cookie)).status, 403);
+    const linked = await request('staff', {
+      cookie: adminCookie, body: { accountMode: 'existing', username: before.username }
+    });
+    assert.equal(linked.status, 201);
+    assert.deepEqual(await access(ordinary.cookie), {
+      status: 200, data: { canOperate: true }, cookie: undefined
+    });
+    assert.equal((await request('users', { cookie: ordinary.cookie })).status, 403);
+    assert.equal((await request('staff', { cookie: ordinary.cookie })).status, 403);
+    assert.deepEqual(DB.database.prepare('SELECT * FROM users WHERE id = ?').get(before.id), before);
+
+    const link = DB.database.prepare('SELECT id FROM staff WHERE user_id = ?').get(before.id);
+    setLink.run(null, link.id);
+    assert.equal((await access(ordinary.cookie)).status, 403);
+    assert.equal((await request('session', { cookie: ordinary.cookie })).data.user.username, before.username);
   });
 
   await t.test('rejects invalid records and rolls back both inserts if staff creation fails', async () => {
@@ -219,5 +254,114 @@ test('Staff Accounts creates linked logins without changing existing accounts', 
     for (const after of ['-1', 'invalid', '9007199254740992']) {
       assert.equal((await request(`staff?after=${after}`, { cookie: adminCookie })).status, 400);
     }
+  });
+
+  await t.test('maintains searchable registers and restricts staff to active records and read access', async () => {
+    const admin = { cookie: adminCookie };
+    const staff = await request('login', { body: { username: credentials.username, password: 'ReplacementStaff!456' } });
+    const staffSession = { cookie: staff.cookie };
+    const ordinary = await request('login', { body: { username: 'ordinary', password: 'OrdinaryPass!123' } });
+    const cadet = { first_name: 'Alex', last_name: 'Example', service_number: 'C-100', status: 'active', date_joined: '2024-02-29' };
+    assert.equal((await request('cadets')).status, 401);
+    assert.equal((await request('cadets', { cookie: ordinary.cookie })).status, 403);
+    assert.equal((await request('cadets', { ...staffSession, body: cadet })).status, 403);
+    assert.equal((await request('cadets', { ...admin, body: { ...cadet, date_joined: '2025-02-29' } })).status, 400);
+    const created = await request('cadets', { ...admin, body: cadet });
+    assert.equal(created.status, 201);
+    const cadetPath = `cadets/${created.data.id}`;
+    assert.equal((await request('cadets', { ...admin, body: { ...cadet, service_number: 'c-100' } })).status, 409);
+    assert.equal((await request('cadets?q=alex%20ex', staffSession)).data.records[0].id, created.data.id);
+    assert.equal((await request(cadetPath, staffSession)).data.record.date_joined, cadet.date_joined);
+    assert.equal((await request(cadetPath, { ...admin, body: { ...cadet, status: 'left' } })).status, 200);
+    assert.equal((await request(cadetPath, staffSession)).status, 404);
+    assert.equal((await request(cadetPath, admin)).data.record.status, 'left');
+
+    const supplier = { name: 'Uniform Supply', contact_person: 'Store contact', status: 'active' };
+    assert.equal((await request('suppliers', { ...staffSession, body: supplier })).status, 403);
+    const first = await request('suppliers', { ...admin, body: supplier });
+    assert.equal(first.status, 201);
+    assert.equal((await request('suppliers', { ...admin, body: { ...supplier, name: 'uniform supply' } })).status, 409);
+    const item = { supplier_id: first.data.id, name: 'Trousers', description: 'Uniform trousers', uniform_type: 'blue', status: 'active' };
+    const catalog = await request('catalog', { ...admin, body: item });
+    assert.equal(catalog.status, 201);
+    assert.equal((await request('catalog', { ...admin, body: { ...item, name: 'trousers' } })).status, 409);
+    const variant = { item_id: catalog.data.id, size: 'Small', status: 'active' };
+    const small = await request('variants', { ...admin, body: variant });
+    assert.equal(small.status, 201);
+    assert.equal((await request('variants', { ...admin, body: { ...variant, size: 'small' } })).status, 409);
+    assert.equal((await request(`variants/${small.data.id}`, { ...admin, body: { status: 'inactive' } })).status, 200);
+    assert.deepEqual((await request(`variants?itemId=${catalog.data.id}`, staffSession)).data.records, []);
+    assert.equal((await request(`variants/${small.data.id}`, admin)).data.record.size, 'Small');
+
+    const insertSupplier = DB.database.prepare("INSERT INTO suppliers (name, status) VALUES (?, 'active')");
+    for (let index = 0; index < 26; index++) insertSupplier.run(`Paging supplier ${index}`);
+    const page = (await request('suppliers?q=paging', staffSession)).data;
+    const next = (await request(`suppliers?q=paging&after=${page.nextCursor}`, staffSession)).data;
+    assert.equal(page.records.length, 25);
+    assert.equal(next.records.length, 1);
+    assert.ok(page.records.every(row => row.id < next.records[0].id));
+    assert.equal(next.nextCursor, null);
+  });
+
+  await t.test('saves pending orders atomically, keeps line identities, and leaves stock unchanged', async () => {
+    const admin = { cookie: adminCookie };
+    const staff = await request('login', { body: { username: credentials.username, password: 'ReplacementStaff!456' } });
+    const staffSession = { cookie: staff.cookie };
+    const ordinary = await request('login', { body: { username: 'ordinary', password: 'OrdinaryPass!123' } });
+    const { id: supplierId } = (await request('suppliers?q=uniform%20supply', admin)).data.records[0];
+    const { id: itemId } = (await request(`catalog?supplierId=${supplierId}`, admin)).data.records[0];
+    const { id: medium } = (await request('variants', { ...admin, body: { item_id: itemId, size: 'Medium', status: 'active' } })).data;
+    const { id: large } = (await request('variants', { ...admin, body: { item_id: itemId, size: 'Large', status: 'active' } })).data;
+    const { id: otherSupplier } = (await request('suppliers', { ...admin, body: { name: 'Other supplier', status: 'active' } })).data;
+    const { id: otherItem } = (await request('catalog', { ...admin, body: {
+      supplier_id: otherSupplier, name: 'Trousers', uniform_type: 'green', status: 'active'
+    } })).data;
+    const { id: foreign } = (await request('variants', { ...admin, body: { item_id: otherItem, size: 'Medium', status: 'active' } })).data;
+    DB.database.exec("INSERT INTO stock (reference, description, quantity) VALUES ('V1-STOCK', 'Existing stock', 12)");
+    const body = { supplierId, requestId: 'test-purchase-order-123', notes: 'Multi-size order', lines: [
+      { variantId: medium, quantity: 6 }, { variantId: large, quantity: 4 }
+    ] };
+    assert.equal((await request('purchase-orders', { cookie: ordinary.cookie, body })).status, 403);
+    assert.equal((await request('purchase-orders', { ...staffSession, body: {
+      ...body, lines: [...body.lines, { variantId: foreign, quantity: 1 }]
+    } })).status, 409);
+    assert.equal(DB.database.prepare('SELECT count(*) AS total FROM purchase_orders').get().total, 0);
+    assert.equal(DB.database.prepare('SELECT count(*) AS total FROM purchase_order_lines').get().total, 0);
+    assert.equal((await request('purchase-orders', { ...staffSession, body: {
+      ...body, lines: [{ variantId: medium, quantity: 1.5 }]
+    } })).status, 400);
+
+    const created = await request('purchase-orders', { ...staffSession, body });
+    assert.equal(created.status, 201);
+    assert.match(created.data.code, /^PO-\d{4,}$/);
+    assert.deepEqual(await request('purchase-orders', { ...staffSession, body }), created);
+    const path = `purchase-orders/${created.data.id}`;
+    const first = (await request(path, staffSession)).data.record;
+    assert.equal(first.status, 'pending');
+    assert.equal(first.lines.length, 2);
+    assert.deepEqual((await request('purchase-orders/summary', staffSession)).data, { pending: 1 });
+    const row = (await request('purchase-orders?q=multi-size', staffSession)).data.records[0];
+    assert.equal(row.line_count, 2);
+    assert.equal(row.unit_count, 10);
+
+    await request(`suppliers/${supplierId}`, { ...admin, body: { name: 'Renamed supplier', status: 'inactive' } });
+    assert.deepEqual((await request(`variants?supplierId=${supplierId}`, staffSession)).data.records, []);
+    assert.equal((await request(path, staffSession)).data.record.supplier_name, 'Uniform Supply');
+    const change = { version: first.version, notes: 'Reduced order', lines: [{ variantId: medium, quantity: 5 }] };
+    const competing = await Promise.all([
+      request(path, { ...staffSession, body: change }),
+      request(path, { ...staffSession, body: change })
+    ]);
+    assert.deepEqual(competing.map(result => result.status).sort(), [200, 409]);
+    const edited = (await request(path, staffSession)).data.record;
+    assert.equal(edited.version, first.version + 1);
+    assert.equal(edited.lines.length, 1);
+    assert.equal(edited.lines[0].id, first.lines[0].id);
+    assert.equal(edited.lines[0].quantity, 5);
+    assert.equal((await request(path, { ...staffSession, body: {
+      ...change, version: edited.version, lines: [{ variantId: medium, quantity: 6 }]
+    } })).status, 409);
+    assert.deepEqual((await request(path, staffSession)).data.record, edited);
+    assert.equal(DB.database.prepare("SELECT quantity FROM stock WHERE reference = 'V1-STOCK'").get().quantity, 12);
   });
 });

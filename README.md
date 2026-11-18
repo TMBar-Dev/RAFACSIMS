@@ -12,7 +12,7 @@ The existing D1 schema requires nonempty name columns, so new staff links use fi
 
 ## Management database schema
 
-`schema.js` defines four management tables alongside the existing authentication tables. After this version is deployed, the next API request runs the Worker's idempotent initialization and creates any missing tables. Preparing or pushing this code does not write to the remote database. The existing D1 database ID, users, sessions and account passwords are preserved; no existing-account import or password reset is required.
+`schema.js` defines the management tables alongside the existing authentication tables. The first API request after deployment runs the Worker's idempotent initialization and creates missing tables. The existing D1 binding, users, sessions and account passwords carry forward.
 
 | Table | Fields and constraints |
 | --- | --- |
@@ -20,17 +20,20 @@ The existing D1 schema requires nonempty name columns, so new staff links use fi
 | `cadets` | `id`; optional unique `service_number`; `first_name`, `last_name`, `rank`, `flight`; optional `date_joined` in `YYYY-MM-DD` form; `status` of `active`, `inactive` or `left`; `created_at`, `updated_at`. |
 | `stock` | `id`; unique `reference`; `description`, `category`, `size`; nonnegative integer `quantity` and `reorder_level`; `location`; `created_at`, `updated_at`. |
 | `orders` | `id`; unique `order_number`; required `stock_id`; positive integer `quantity`; `order_type` of `issue`, `return` or `restock`; `status` of `draft`, `submitted`, `fulfilled` or `cancelled`; optional `cadet_id`, `staff_id`, `created_by_user_id`; `notes`; `created_at`, `updated_at`. |
+| `suppliers` | Unique name, address, contact details and active status. |
+| `catalog_items`, `catalog_variants` | Item names are unique per supplier, and sizes are unique per item. Items store description, Blue/Green type and status. Variants have their own status. |
+| `purchase_orders`, `purchase_order_lines` | A purchase order has a generated reference, one supplier, remarks, actor, status and version. Lines reference individual size variants and retain the recorded item and size labels. |
 
 Relationships and initial assumptions:
 
 - A staff record may link to one user account; the unique `user_id` prevents multiple staff records linking to the same account. Deleting that account sets the staff link to null rather than deleting the staff record.
 - Staff appointment/status fields describe the profile only. Sign-in permissions still come from the existing `users` table; these profile fields do not grant or revoke login access.
-- Each order initially represents one stock item. Its required `stock_id` prevents deletion of referenced stock while an order still references it.
+- The original `orders` table represents one stock item per row. Its required `stock_id` prevents deletion of referenced stock. Multi-line purchase orders use separate tables so original rows stay available for reconciliation.
 - Optional order links identify a cadet, staff member and creating user account. Deleting one of those linked records sets its corresponding order reference to null; it does not delete the order.
 - Timestamps are Unix seconds. `updated_at` receives an initial value when a record is created; future write handlers must update it explicitly. There is no automatic timestamp-update trigger.
-- Creating or changing an order does not automatically change stock quantities. That workflow has not been implemented.
+- Creating or editing a purchase order leaves stock quantities alone. Receiving will post stock movements.
 
-The initial schema change provided table definitions only. Staff Accounts now lists and creates staff profiles linked to logins as described above. Cadets and Stock Management remain frontend templates, and there are no cadet, stock or order management endpoints yet. User Management remains a separate account-only feature. `CREATE TABLE IF NOT EXISTS` initializes missing tables; it is not a general migration mechanism for altering an existing table's columns.
+`CREATE TABLE IF NOT EXISTS` initializes missing tables. Changes to existing table definitions require a separate migration.
 
 ### Schema change review: 17 November 2026
 
@@ -46,15 +49,22 @@ After signing in and completing any required password change, the application pr
 
 | Page | Application route | Current scope |
 | --- | --- | --- |
-| Dashboard | `#/dashboard` | Overview and links to management pages and templates. |
+| Dashboard | `#/dashboard` | Live pending purchase-order count for users with operational access. |
 | User Management | `#/users` | Working administrator-only account list and account creation, backed by the existing D1 users table. |
-| Cadets | `#/cadets` | Cadet register layout, proposed columns and empty-state guidance. |
+| Cadets | `#/cadets` | Search and view cadets. Administrators can add and edit records, including inactive and left statuses. |
+| Suppliers | `#/suppliers` | Administrator-only supplier register and contact maintenance. |
+| Item Catalog | `#/catalog` | Administrator-only catalog maintenance. View an item to manage its sizes. |
+| Orders | `#/orders` | Search, create, print and edit pending purchase orders. |
 | Stock Management | `#/stock` | Stock register layout, proposed columns and empty-state guidance. |
 | Staff Accounts | `#/staff` | Working administrator-only staff directory and profile creation with new or existing sign-in accounts. |
 
-Dashboard provides navigation to working account pages and the remaining templates. Cadets and Stock Management are page templates while the original application code is being located. Their displayed record tables are intentionally empty and are not connected to their database tables. Record-entry, search, import and export controls shown in those templates are disabled; they do not save management records or pretend an operation succeeded. There are no cadet, stock or order management endpoints yet. Staff Accounts and User Management are working features, not empty register templates.
+Stock Management remains a template until receiving and stock movements are implemented. The [implementation checklist](TODO.md) tracks those workflows and the eventual V1 data reconciliation.
 
 Staff Accounts and User Management navigation are restricted to the administrator view. This frontend visibility rule is not an authorization boundary: both APIs independently require a live administrator session and completion of any mandatory password change before they return records or create accounts.
+
+Cadets, Orders and Stock Management are visible to administrators and ordinary users linked through Staff Accounts. The browser checks operational access when it restores or establishes a session and after a password change. A newly linked user can reload to refresh navigation. The Worker checks D1 on each operational request.
+
+Staff can read active register records and create or edit purchase orders. Administrators can also view retired records and maintain the registers. Catalog items keep their supplier after creation, and existing size variants can be retired or reactivated. Purchase orders retain supplier, item and size labels for historical display. An order keeps its supplier after creation. Pending orders can keep or reduce an existing inactive line, while new lines need an active supplier, item and size.
 
 Existing registration, sign-in, session restoration, logout and password-change flows remain the account foundation. Management templates mount only after an authenticated session is restored or established and the account no longer requires its initial password to be changed. The optional password-change form remains available from the signed-in interface.
 
@@ -148,11 +158,12 @@ Sign in immediately after deployment and replace the initial password. The API r
 
 Public registration creates ordinary users, never administrators. Sessions use random tokens, stored hashed in D1, in Secure/HttpOnly/SameSite cookies with a 24-hour expiry. Password changes invalidate all prior sessions and issue a fresh token. API responses return only explicitly allowed account fields; password hashes and session tokens are never returned in response bodies.
 
-Authentication, administrator account management and staff profile listing/creation are implemented. Cadet and stock pages remain frontend templates. Their database schema, plus orders, is defined in schema.js, but their record-management APIs and page connections have not yet been implemented. No existing MySQL account export was available, so existing accounts are not imported.
+The local `V1/` copy is reference material. Importing legacy accounts or operational data requires separate reconciliation.
 
 ## API
 
 - GET /api/session
+- GET /api/operations/access returns `{ "canOperate": true }` to an administrator or linked staff user who has completed any required password change. Signed-out requests receive 401. Other ineligible sessions receive 403.
 - POST /api/register: username, password
 - POST /api/login: username, password
 - POST /api/change-password: currentPassword, newPassword
@@ -164,6 +175,13 @@ Authentication, administrator account management and staff profile listing/creat
 
 Both Staff Accounts endpoints and both User Management endpoints require an authenticated administrator who has completed any mandatory password change. The existing same-origin JSON checks and write-request rate limit also apply to account/profile creation.
 
+- `GET /api/{cadets,suppliers,catalog,variants,purchase-orders}` returns up to 25 `records` and a `nextCursor`. Use `q` for search and `after` for the next page. Append `/ID` to get an individual `record`. Register lists support `active=1` for pickers. Catalog and variants support `supplierId`, and variants also support `itemId`.
+- `POST /api/{cadets,suppliers,catalog,variants}` creates a record. Append `/ID` to update one. Writes require an administrator and use the fields in the corresponding register.
+- `POST /api/purchase-orders` creates an order with `supplierId`, optional `notes` and 1–50 `lines`. Each line has `variantId` and a positive whole `quantity` up to 1,000,000. A caller can reuse its `requestId` to recover the original reference if the create response is lost. Append `/ID` and supply the current `version` when editing a pending order.
+- `GET /api/purchase-orders/summary` returns `pending`, the count of orders awaiting all or part of their delivery.
+
+Management writes share a per-IP rate limit separate from authentication and account maintenance. The isolated API suite covers permissions, register search and pagination, duplicate and inactive records, multi-size orders, rollback, repeat creates, stale edits and unchanged stock. Cloudflare build and browser verification cover the remaining integration checks.
+
 JSON POST requests must include a matching Origin header (automatically sent by the browser). All API responses are private/no-store. Password hashing uses Workers Web Crypto PBKDF2 with 100,000 iterations for runtime compatibility. Authentication requests are rate limited by source IP using D1. Expired rate-limit buckets and sessions are removed opportunistically.
 
 The unused Express/MySQL backend and its duplicate dependency manifests have been removed. All application files are in the repository root, with a single package.json and package-lock.json. The Worker uses platform APIs without npm dependencies.
@@ -171,10 +189,11 @@ The unused Express/MySQL backend and its duplicate dependency manifests have bee
 ## Files
 
 - main.jsx and App.css: React interface and styling.
-- templates.jsx: Dashboard, navigation definitions and reusable Cadets/Stock Management page templates.
+- templates.jsx: Dashboard, navigation definitions and the Stock Management template.
+- registers.jsx, purchase-orders.jsx and management-ui.jsx: live register and purchase-order screens and shared search and picker components.
 - users.jsx: live administrator account listing, pagination and account creation.
 - staff.jsx: live staff profile listing and creation with new or existing login accounts.
-- worker.js: authentication API, sessions and D1 table setup.
+- worker.js and management.js: authentication, D1 initialization and operational API handlers.
 - schema.js: management table definitions, constraints and relationships used during Worker initialization.
 - schema.test.mjs: isolated SQLite tests for the management schema; no live D1 writes.
 - users-api.test.mjs: isolated SQLite-backed API checks, invoked with npm test; not a live D1 or frontend/browser test.
