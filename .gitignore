@@ -3,6 +3,8 @@ node_modules/
 build/
 dist/
 coverage/
+# Local SIS reference source, SQL exports and configuration.
+/V1/
 # Local secrets must never be committed or copied to the public build.
 .env
 .env.*
