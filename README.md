@@ -110,7 +110,9 @@ The Worker initializes missing tables on API access. D1 stores accounts in `staf
 
 | Workers Builds setting | Value |
 | --- | --- |
-| Repository and branch | `TMBar-Dev/RAFACSIMS`, `main` |
+| Repository | `TMBar-Dev/RAFACSIMS` |
+| Production branch | `main` |
+| Shared preview branch | `preview` |
 | Root directory | Repository root |
 | Build command | `npm run build` |
 | Deploy command for the original account | `npx wrangler deploy` |
@@ -122,6 +124,10 @@ Set the Workers Builds root to the repository root. Both Wrangler configs point 
 Each Cloudflare account has its own D1 database. `wrangler.jsonc` points to the original database. `wrangler.other.jsonc` points to the second account's database. Both expose the binding as `DB`. Set the second Worker's deploy command explicitly so Wrangler selects its database. The deploy identity needs access to the Worker and its configured D1 database.
 
 **Public files.** The build copies the favicon, Apple touch icon, two app icons, manifest and robots file from `Frontend/`, and the `_headers` file from `Cloudflare/`, alongside the bundled app. The `build/` binding keeps repository files, SQL exports, secrets and `V1/` outside the public asset directory.
+
+### Shared preview
+
+Use `preview` as the long-lived branch for testing in Cloudflare before release. Keep the production branch set to `main`. In the second Cloudflare account, set the Preview command to `npx wrangler preview --config wrangler.other.jsonc`. In the original account, use `npx wrangler preview`. Both use the repository root and `npm run build`.
 
 ### Updating an existing database
 
