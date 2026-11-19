@@ -1,23 +1,53 @@
-# CAT SIMS implementation checklist
+# CAT SIMS release checklist and development priorities
 
-Phase 7 is the owner-led release check. All 26 local schema and API tests passed. Production build, browser and scheduled deployment checks remain open. See the [design](DESIGN.md) for implemented workflows and scope decisions.
+Phase 7 is the owner-led release check. All 26 local schema and API tests passed during the source review. The Cloudflare build, scheduled deployment and live browser checks are still open. See [DESIGN.md](DESIGN.md) for implemented workflows and scope decisions.
 
 ## 7. Verify the release
 
-Owner decision. Skip legacy import and data reconciliation. Use fresh test records for the release checks. `V1/` stays local and ignored.
+Use fresh test records. Legacy import and reconciliation are outside this release, and `V1/` stays local and ignored.
 
-- [ ] Confirm the Cloudflare build and the deployed commit. Verify the existing D1 binding, the `build/` asset path and that direct requests cannot retrieve source files, SQL exports or `V1/`. If provisioning a fresh D1 database, configure the administrator bootstrap secret before first sign-in.
-- [ ] In the deployed browser, check sign-in and page access as an administrator, linked staff member, unlinked user and account awaiting a mandatory password change. Verify direct links as well as navigation.
-- [ ] As an administrator, create a test cadet, supplier and sized item. Verify register search and edits and confirm inactive options disappear from new transaction pickers.
-- [ ] Order 10 units, receive 6 and receive the remaining 4 against the same back order. Check both dashboard counts, receipt history, the stock size balance and purchase-order, back-order and receipt printing.
-- [ ] Issue 2 units, return 1 to the supplier and reverse the issue as an administrator. Check balances of 8, 7 and 9, the movement audit, the reversed Cadet Kit entry and printable issue and return details.
-- [ ] On a separate test account, verify username or role edits, temporary password reset, deactivation and reactivation. Check previous sessions are revoked as expected. Save test branding and confirm About Us on the dashboard, the cover at sign-in and preservation of the saved image after a rejected upload.
-- [ ] Record the deployed commit, date and outcomes. If fixes are needed, review the changed files, rerun affected isolated tests and obtain approval for each additional push. Keep source review, dependency audit, Cloudflare build and deployed browser checks separate.
-- [ ] Confirm the existing Worker has the Monday 03:00 UTC trigger and scheduled hook secret. Check for the build ID in Workers Logs after a scheduled run and confirm the result in Workers Builds.
+### Deployment
+
+- [ ] Confirm Workers Builds succeeded and record the deployed commit. Check that the Worker uses the existing D1 binding and serves public assets from `build/`.
+- [ ] Request known source, SQL export and `V1/` paths and check the response contents. A missing path may return the app shell because of the single-page application fallback. The private file contents must stay inaccessible.
+- [ ] Confirm the Monday 03:00 UTC trigger and scheduled hook secret on the existing Worker. Match the scheduled build ID in Workers Logs to its deployment result in Workers Builds.
+
+For a fresh database, configure the [administrator bootstrap secret](README.md#first-sign-in) before first sign-in.
+
+### Sign-in, access and registers
+
+- [ ] Check sign-in, navigation and direct links as an administrator, a linked staff member, an unlinked user and an account awaiting a mandatory password change.
+- [ ] As an administrator, create a test cadet, supplier and sized item. Verify register search and edits. Retire a test option and confirm it disappears from new transaction pickers.
+
+### Order, receipt and stock correction
+
+Use one test size starting at zero stock so changes can be checked against the ledger.
+
+| Action | Expected result |
+| --- | --- |
+| Order 10 units | The order is outstanding and stock stays at 0. |
+| Receive 6 | Stock is 6. The outstanding order count stays the same and the open back-order count rises by one. The back order shows 4 units remaining. |
+| Receive the remaining 4 against the same back order | Stock is 10. The order is fully received and the back order closes. Both dashboard counts fall by one. |
+| Issue 2 to the test cadet | Stock is 8. |
+| Return 1 to the supplier | Stock is 7. |
+| Reverse the 2-unit issue as an administrator | Stock is 9. Cadet Kit shows the reversed issue in history and excludes it from active totals. |
+
+- [ ] Run the scenario and verify the dashboard count changes, receipt history, size balance, movement audit and Cadet Kit entry.
+- [ ] Check the printable purchase order, back order, receipts, issue and supplier return.
+
+### Account administration and branding
+
+- [ ] Use a separate test account to check username or role edits, temporary password reset, deactivation and reactivation. Check that changes revoke previous sessions as expected.
+- [ ] Save test branding. Verify About Us on the dashboard and the cover at sign-in. Try a rejected upload and confirm that the saved image is still available.
+
+### Record the results
+
+- [ ] Record the date, deployed commit and outcomes. Report the source review, dependency audit, Cloudflare build and deployed browser checks separately.
+- [ ] If fixes are needed, review the changed files, rerun affected isolated tests and obtain approval for each additional push. See [AGENTS.md](AGENTS.md).
 
 ## Development after release verification
 
-1. **Fix issues found during the stores pilot.** Observe a staff member raising a multi-size order, receiving a partial delivery, finding available stock and printing an issue. Prioritize anything that blocks posting or obscures whether a save succeeded. Include keyboard navigation, narrow screens, print output, stale edits and interrupted saves.
-2. **Make production support repeatable.** Record how to identify the deployed commit, detect failed builds or Worker errors, roll back code and recover D1. Exercise recovery in a separate database and check account access, open order quantities and stock totals afterwards.
-3. **Plan a separate dependency upgrade.** Audit the lockfile and address actionable advisories. Assess supported React and Material UI versions and verify layout, dialogs, form controls and printing against the release baseline.
-4. **Validate requests for new scope.** Find out which recurring tasks stores staff cannot complete. Cadet handbacks, current holdings and CSV exchange need explicit requirements before implementation. Keep legacy migration out of this release.
+1. **Fix problems found during the stores pilot.** Observe a staff member raising a multi-size order, receiving part of it, finding stock and printing an issue. Prioritise failures that block posting or make it unclear whether a save succeeded. Check keyboard navigation, narrow screens, print output, stale edits and interrupted saves.
+2. **Make production support repeatable.** Document how to identify the deployed commit, detect failed builds or Worker errors, roll back code and recover D1. Exercise recovery in a separate database and check account access, open order quantities and stock totals afterwards.
+3. **Plan the dependency upgrade separately.** Audit the lockfile and address actionable advisories. Assess supported React and Material UI versions and check layout, dialogs, controls and printing against the release baseline.
+4. **Confirm demand before adding workflows.** Find out which recurring tasks stores staff cannot complete. Cadet handbacks, current holdings and CSV exchange need explicit requirements. Legacy migration remains outside this release.

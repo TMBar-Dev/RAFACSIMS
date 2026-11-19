@@ -8,6 +8,8 @@ The project rebuilds the workflows of the SIS V1 PHP/MySQL reference as a React 
 - [Release checklist and development priorities](TODO.md)
 - [Repository and post-push requirements](AGENTS.md)
 
+Jump to [stores workflows](#stores-workflows), [request and data flow](#request-and-data-flow), [Cloudflare deployment](#cloudflare-deployment), [development and verification](#development-and-verification) or the [API reference](#api).
+
 ## Stores workflows
 
 1. Administrators set up suppliers, cadets, catalog items and sizes. Staff account creation uses **Username**, **Password** and **Role**. Administrators can also link an existing login.
@@ -16,6 +18,26 @@ The project rebuilds the workflows of the SIS V1 PHP/MySQL reference as a React 
 4. Administrators can cancel eligible unreceived orders or reverse posted movements with a reason. The originals and the corrections remain available in history. Transaction details support printing.
 
 The dashboard links operational users to outstanding purchase orders and back orders. About Us is shown after sign-in and any required password change.
+
+### How transactions change stock
+
+A purchase order records what is expected. Stock changes when a receipt, issue, supplier return or reversal posts movements to the ledger.
+
+```mermaid
+flowchart TD
+    Purchase["Purchase order lines"] --> Receipt["Post a receipt (+ units)"]
+    Receipt --> Batch["D1 batch: transaction and stock movements"]
+    Outbound["Issue or supplier return (- units)"] --> Batch
+    Reversal["Administrator reversal (opposite units)"] --> Batch
+    Batch --> Ledger[("Posted stock movements")]
+    Ledger -->|Sum by item and size| Balance["Available stock"]
+    Purchase -->|Ordered units by line| Remaining["Remaining units and back-order status"]
+    Ledger -->|Net receipts by order line| Remaining
+```
+
+The remaining quantity is the ordered quantity minus net receipts. D1 rejects movements that would make a size balance negative or take net receipts outside the ordered quantity. The same batch updates the purchase order when a receipt is posted or reversed. A partial receipt creates one back order per purchase order. Subsequent receipts use that same reference. See the [worked stock example](DESIGN.md#worked-example-for-one-uniform-size).
+
+### Account access
 
 | Access | Capabilities |
 | --- | --- |
@@ -26,9 +48,51 @@ The dashboard links operational users to outstanding purchase orders and back or
 
 Deactivation blocks sign-in and preserves historical attribution. The Worker checks permissions for each protected API request.
 
+### Sign-in and session checks
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Worker
+    participant D1
+    Browser->>Worker: POST /api/login with username and password
+    Worker->>D1: Read active account and password hash
+    D1-->>Worker: Account record
+    Worker->>Worker: Verify the password
+    Worker->>D1: Store hashed session token and expiry
+    Worker-->>Browser: Set HttpOnly session cookie and return account details
+    opt Password change required
+        Browser->>Worker: POST /api/change-password
+        Worker->>D1: Update password hash and replace prior sessions
+        Worker-->>Browser: Set fresh session cookie
+    end
+    Browser->>Worker: Protected request with session cookie
+    Worker->>D1: Look up the hashed token and current account access
+    D1-->>Worker: Session and access records
+    Worker->>Worker: Apply the route permissions
+    Worker-->>Browser: Return data or an access error
+```
+
+The diagram follows a successful sign-in. On page load, the browser can restore an existing session through `GET /api/session`, which returns `user: null` if the session is missing or expired.
+
 ## Architecture and repository layout
 
 The source lives at the repository root. React 17 and Material UI 4 provide the interface. esbuild bundles scripts, styles, fonts and imported images into `build/` with content-hashed filenames. Wrangler deploys the Worker and the static assets together. Requests to `/api/*` reach the Worker first. Other paths use the asset binding and the single-page application fallback.
+
+### Request and data flow
+
+```mermaid
+flowchart TD
+    Browser["Browser running the React app"]
+    Browser -->|Page and asset requests| Assets["Cloudflare static assets: build/"]
+    Assets -->|HTML, scripts, styles and images| Browser
+    Browser -->|Same-origin API requests| Worker["Cloudflare Worker: worker.js"]
+    Worker -->|JSON responses or branding images| Browser
+    Worker -->|Queries and writes via DB binding| Database[("D1: accounts, registers, orders, stock and branding")]
+    Database -->|Records and query results| Worker
+```
+
+### Source files
 
 | Area | Files |
 | --- | --- |
@@ -50,58 +114,64 @@ The Worker initializes missing tables on API access. Keep the existing `DB` bind
 | Deploy command | `npx wrangler deploy` |
 | Worker and D1 database name | `rafacsims` |
 
-Set the build root to the repository root in place of the former `client/` directory. Use the asset binding in `wrangler.jsonc` without a separate `--assets` argument. The deploy identity needs access to the Worker and its configured D1 database. The public asset allowlist includes the favicon, Apple touch icon, two app icons, manifest and robots file alongside the bundled app. Keep source, SQL exports, secrets and `V1/` outside the published directory.
+Set the Workers Builds root to the repository root. Clear the former `client/` setting if it is still present. Use the asset binding in `wrangler.jsonc` without a separate `--assets` argument. The deploy identity needs access to the Worker and its configured D1 database.
+
+**Public files.** The build copies the favicon, Apple touch icon, two app icons, manifest and robots file alongside the bundled app. The `build/` binding keeps repository files, SQL exports, secrets and `V1/` outside the public asset directory.
 
 ### First sign-in
 
-For a fresh database or a reserved `admin` account still on the retired credential, set the Worker secret `ADMIN_BOOTSTRAP_PASSWORD` to a unique password of 16–128 characters. Sign in as `admin`, complete the required password change, verify the new sign-in and remove the secret. Existing changed passwords survive redeployment.
+Use this setup for a fresh database or a reserved `admin` account still on the retired credential.
 
-Sessions expire after 24 hours and use Secure, HttpOnly, SameSite cookies with hashed tokens in D1. Password changes revoke prior sessions. Administrator username or role changes, resets and deactivation revoke affected sessions.
+1. Set the Worker secret `ADMIN_BOOTSTRAP_PASSWORD` to a unique password of 16–128 characters.
+2. Sign in as `admin` and replace the temporary password when prompted.
+3. Verify sign-in with the new password, then remove the bootstrap secret.
+
+Existing changed passwords survive redeployment. Sessions expire after 24 hours and use Secure, HttpOnly, SameSite cookies with hashed tokens in D1. Password changes and administrator actions such as username or role edits, resets and deactivation revoke affected sessions.
 
 ### Weekly and post-push deployment
 
-Manage the Monday 03:00 UTC schedule under **Trigger Events** on the existing Worker. Omit a cron declaration from `wrangler.jsonc` to leave the schedule under dashboard management. The scheduled handler reads the runtime secret `CLOUDFLARE_DEPLOY_HOOK_URL` and requests a rebuild of `main` even when the branch has no new commits. The scheduled hook value is kept locally in the ignored `.env.cloudflare-nightly-deploy-hook` file. Verify the trigger, secret and acknowledged build ID in Workers Logs, then check the deployment result in Workers Builds. A rebuild uses the current branch, so code defects still require a fix or rollback.
+- **Weekly rebuild.** Set Monday at 03:00 UTC under **Trigger Events** on the existing Worker. Keep cron out of `wrangler.jsonc` so the dashboard owns the schedule. The handler uses the runtime secret `CLOUDFLARE_DEPLOY_HOOK_URL` to rebuild `main`, including weeks with no new commits. The local hook value is kept in the ignored `.env.cloudflare-nightly-deploy-hook` file.
+- **After an approved push.** Use the separate hook in the ignored `.env.cloudflare-deploy-hook` file. Follow the approval and reporting steps in [AGENTS.md](AGENTS.md).
 
-The separate post-push hook uses the ignored `.env.cloudflare-deploy-hook` file. Follow [AGENTS.md](AGENTS.md) for approval and reporting. A queued build confirms acceptance of the request. Confirm deployment separately.
+A queued build confirms Cloudflare accepted the request. For a scheduled run, match the build ID in Workers Logs to the result in Workers Builds. Both hooks build the configured branch. A code defect still needs a fix or rollback.
+
+#### Build and deployment flow
+
+```mermaid
+flowchart TD
+    Push["Approved push to GitHub main"] --> PushHook["Post-push hook"]
+    Cron["Cloudflare Trigger Events: Monday 03:00 UTC"] --> Scheduled["Worker scheduled handler"]
+    Scheduled --> ScheduleHook["Scheduled hook"]
+    PushHook --> Build["Workers Builds reads GitHub main"]
+    ScheduleHook --> Build
+    Build --> Bundle["npm run build creates build/"]
+    Bundle --> Deploy["npx wrangler deploy publishes Worker and assets"]
+    Deploy -->|Uses existing DB binding| Database[("Production D1")]
+```
 
 ## Branding
 
-Administrators can change the system name, short name, About Us, app-bar logo and sign-in cover. The logo accepts PNG or JPEG up to 128 KiB and 1,024 pixels per side. The cover accepts the same formats up to 512 KiB and 2,560 pixels per side. The Worker validates uploaded bytes before replacing saved images. Browser and home-screen icons use the bundled carton artwork. The default sign-in cover is the ImageGen-produced `stores-cover.jpg`.
+Administrators can change the system name, short name, About Us, app-bar logo and sign-in cover. The Worker validates uploads before replacing a saved image.
 
-## API
+| Image | Formats | File limit | Maximum pixels per side |
+| --- | --- | --- | --- |
+| Logo | PNG or JPEG | 128 KiB | 1,024 |
+| Sign-in cover | PNG or JPEG | 512 KiB | 2,560 |
 
-- GET /api/session
-- GET /api/operations/access returns `{ "canOperate": true }` to an administrator or linked staff user who has completed any required password change. Signed-out requests receive 401. Other ineligible sessions receive 403.
-- POST /api/register: username, password
-- POST /api/login: username, password
-- POST /api/change-password: currentPassword, newPassword
-- POST /api/logout
-- GET /api/users?after=0 returns up to 25 accounts with ID, username, role, active status, password-change status and creation time. Use the returned cursor for the next page.
-- POST /api/users: administrator-only creation with `username`, `password` and `role`; the created account must change its password on first login.
-- POST /api/users/ID/edit accepts `username`, `role`, `previousUsername` and `previousRole`. POST /api/users/ID/reset-password accepts `password`. POST /api/users/ID/deactivate and /api/users/ID/reactivate accept an empty JSON object.
-- GET /api/staff?after=0 returns up to 25 entries ordered by staff ID, along with the next cursor or null. Each entry contains its staff ID and an account with ID, username, role, active status and password-change status. Unlinked entries have a null account.
-- POST /api/staff creates a staff login from username, password and role. To link an existing login, send username and accountMode set to existing. The response contains a confirmation message.
-- GET /api/branding and /api/branding/{logo,cover} provide the public display metadata and images. GET /api/about requires a ready signed-in account.
-- GET and POST /api/settings are administrator-only. POST accepts `name`, `shortName` and `aboutUs`. POST /api/branding/{logo,cover} accepts base64 `content` or `restore: true` with the previous `revision`. The browser can fall back to a previous image if a replacement fails to render.
+Browser and home-screen icons use the bundled carton artwork. The ImageGen-produced `stores-cover.jpg` is the default sign-in cover.
 
-Staff Accounts and User Management endpoints require an authenticated administrator who has completed any mandatory password change. Administrator writes use the same-origin JSON checks and are rate limited.
+<details>
+<summary>Default cover generation prompt</summary>
 
-- `GET /api/{cadets,suppliers,catalog,variants,purchase-orders}` returns up to 25 `records` and a `nextCursor`. Use `q` for search and `after` for the next page. Append `/ID` to get an individual `record`. Register lists support `active=1` for pickers. Catalog and variants support `supplierId`, and variants also support `itemId`.
-- `POST /api/{cadets,suppliers,catalog,variants}` creates a record. Append `/ID` to edit it, supplying the `version` obtained from that record's detail. A stale version returns a conflict. Writes require an administrator.
-- `POST /api/purchase-orders` creates an order with `supplierId`, optional `notes` and 1–50 `lines`. Each line has `variantId` and a positive whole `quantity` up to 1,000,000. A caller can reuse its `requestId` to recover the original reference if the create response is lost. Append `/ID` and supply the current `version` when editing a pending order.
-- `GET /api/purchase-orders/summary` returns `pending`, the count of orders awaiting all or part of their delivery.
-- `GET /api/{receipts,back-orders,issues,supplier-returns,cadet-kit,inventory-stock}` provides searchable lists and `/ID` details. Back orders also expose `/summary`. Stock item details expose `/ID/sizes` and `/ID/movements`. For filtered history use `orderId` on receipts or `cadetId` on issues.
-- `POST /api/receipts` accepts `orderId`, optional `backOrderId`, optional `notes` and lines with `orderLineId` and `quantity`. `POST /api/issues` or `POST /api/supplier-returns` accepts `cadetId` or `supplierId`, optional `notes` and lines with `variantId` and `quantity`. Reusing the same `requestId` with the same transaction data returns the original reference.
-- `GET /api/posting-status/{purchase-orders,receipts,issues,supplier-returns}/REQUEST_ID` returns the original reference to its author after an interrupted save. The browser keeps only a pending request ID in the current tab while the outcome is uncertain.
-- Administrators can POST `reason` to `/api/purchase-orders/ID/cancel` or to `/api/{receipts,issues,supplier-returns,opening-balances}/ID/reverse`. The administrator GET endpoint `/api/opening-balances` lists previously posted opening balances.
+> Photorealistic editorial cover photograph for a modern RAF Air Cadets squadron stores inventory web app. Wide landscape image, a tidy stack of folded plain RAF-blue shirts and dark navy uniform knitwear beside a pair of polished black parade boots on a light utilitarian shelf. Keep the objects grouped to the LEFT with comfortable framing and generous quiet dark slate-blue negative space on the RIGHT for an overlaid sign-in card. Use natural side light, tactile fabric and leather, subtle grain, dark ink-blue and desaturated blue-grey palette. A contemporary product photograph, grounded and recognisably about uniform stores. No people, insignia, logos, badges, weapons, aircraft, lettering or watermarks. No UI in the image.
 
-Management writes share a per-IP rate limit separate from authentication and account maintenance. The isolated API suite covers register and order conflicts, posting recovery, D1 stock invariants, opening-balance reversals, administrator provisioning and branding rollback. Cloudflare build and browser verification cover the remaining integration checks.
-
-JSON POST requests must include a matching Origin header (automatically sent by the browser). All API responses are private/no-store. Password hashing uses Workers Web Crypto PBKDF2 with 100,000 iterations for runtime compatibility. Authentication requests are rate limited by source IP using D1. Expired rate-limit buckets and sessions are removed opportunistically.
+</details>
 
 ## Development and verification
 
-Use Node.js 22.12 or later and npm 10.9.2 from the repository root. Regenerate the lockfile with that npm version when changing dependencies. `npm run dev` provides a frontend-only preview at `127.0.0.1:5173`. Use the deployed app for Worker and D1 workflows. Restart the preview after changing the HTML template or copied public assets.
+Use Node.js 22.12 or later and npm 10.9.2 from the repository root. Regenerate the lockfile with that npm version when changing dependencies.
+
+`npm run dev` provides a frontend-only preview at `127.0.0.1:5173`. Restart it after changing the HTML template or copied public assets. Use the deployed app for Worker and D1 workflows.
 
 - `npm test` runs the Node.js SQLite-backed schema and API tests without writing to live D1. If the shell blocks child processes, use `node --test --test-isolation=none *.test.mjs` on Node 24.
 - `npm audit --package-lock-only` checks dependency advisories without installing packages.
@@ -112,9 +182,66 @@ Use Node.js 22.12 or later and npm 10.9.2 from the repository root. Regenerate t
 
 Complete owner-led release verification first, including the Monday deployment and a full stores workflow through stock correction. Use pilot feedback to prioritize navigation, forms, interrupted saves and printing. Document D1 recovery and monitoring, then plan the React and Material UI upgrade separately from feature work. See the [prioritized backlog](TODO.md#development-after-release-verification).
 
-<details>
-<summary>Default cover generation prompt</summary>
+## API
 
-> Photorealistic editorial cover photograph for a modern RAF Air Cadets squadron stores inventory web app. Wide landscape image, a tidy stack of folded plain RAF-blue shirts and dark navy uniform knitwear beside a pair of polished black parade boots on a light utilitarian shelf. Keep the objects grouped to the LEFT with comfortable framing and generous quiet dark slate-blue negative space on the RIGHT for an overlaid sign-in card. Use natural side light, tactile fabric and leather, subtle grain, dark ink-blue and desaturated blue-grey palette. A contemporary product photograph, grounded and recognisably about uniform stores. No people, insignia, logos, badges, weapons, aircraft, lettering or watermarks. No UI in the image.
+Send JSON for `POST` requests with an `Origin` that matches the request URL. Browser requests set this header automatically. Responses use Cache-Control: no-store.
 
-</details>
+D1 stores hashed session tokens and rate-limit entries. Authentication and user or staff creation share a per-IP rate-limit bucket. Operational writes, branding, settings and individual user edits, resets and access changes use a separate bucket. The Worker removes expired rate-limit entries and sessions during normal requests.
+
+### Sessions and passwords
+
+| Endpoint | Request or result |
+| --- | --- |
+| `GET /api/session` | Returns the session user, or `{ "user": null }` when signed out. |
+| `GET /api/operations/access` | Returns `{ "canOperate": true }` for an administrator or linked staff member who has completed any required password change. Returns `401` when signed out and `403` for other ineligible sessions. |
+| `POST /api/register` and `POST /api/login` | Send `username` and `password`. |
+| `POST /api/change-password` | Send `currentPassword` and `newPassword`. The Worker revokes prior sessions and issues a fresh one. |
+| `POST /api/logout` | Ends the current session. |
+
+The Worker uses Web Crypto PBKDF2 with 100,000 iterations for password hashing to fit the Worker runtime.
+
+### Staff and user management
+
+These routes require an administrator who has completed any mandatory password change.
+
+| Endpoint | Request or result |
+| --- | --- |
+| `GET /api/users?after=0` | Lists up to 25 accounts with ID, username, role, active status, password-change status and creation time. |
+| `POST /api/users` | Send `username`, `password` and `role`. The account must change its password at first sign-in. |
+| `POST /api/users/ID/edit` | Send `username`, `role`, `previousUsername` and `previousRole`. |
+| `POST /api/users/ID/reset-password` | Send the temporary `password`. |
+| `POST /api/users/ID/deactivate` and `POST /api/users/ID/reactivate` | Send an empty JSON object. |
+| `GET /api/staff?after=0` | Lists up to 25 staff entries by staff ID. Each entry includes account ID, username, role, active status and password-change status when a login is linked. Unlinked entries have `account: null`. |
+| `POST /api/staff` | Send `username`, `password` and `role` to create a login, or `username` and `accountMode: "existing"` to link one. Returns a confirmation message. |
+
+For the next page of either list, pass the returned `nextCursor` as `after`. A null cursor means the list is complete.
+
+### Registers and purchase orders
+
+Administrators and linked staff can read registers and use purchase orders. Linked staff see only active register records. Register writes require an administrator.
+
+- **List and detail.** `GET /api/{cadets,suppliers,catalog,variants,purchase-orders}` returns up to 25 `records` and a `nextCursor`. Use `q` for search and `after` for the next page. Append `/ID` for a single `record`.
+- **Register filters.** Use `active=1` for pickers. Catalog and variant lists support `supplierId`. Variants also support `itemId`.
+- **Register writes.** `POST /api/{cadets,suppliers,catalog,variants}` creates a record. Append `/ID` and send the current `version` from the detail response to edit. A stale version returns a conflict.
+- **Order writes.** `POST /api/purchase-orders` accepts `supplierId`, optional `notes` and 1–50 `lines`. Each line has `variantId` and a positive whole `quantity` up to 1,000,000. Append `/ID` and send the current `version` to edit a pending order.
+- **Dashboard total.** `GET /api/purchase-orders/summary` returns the count of orders awaiting all or part of their delivery as `pending`.
+
+### Inventory and transaction recovery
+
+Administrators and linked staff can use inventory workflows. Cancellations, reversals and opening balance history require an administrator.
+
+- **Lists and details.** `GET /api/{receipts,back-orders,issues,supplier-returns,cadet-kit,inventory-stock}` supports search and `/ID` details. Back orders expose `/summary`. Stock details expose `/ID/sizes` and `/ID/movements`. Use `orderId` on receipt history or `cadetId` on issue history.
+- **Receiving.** `POST /api/receipts` accepts `orderId`, optional `backOrderId`, optional `notes` and lines with `orderLineId` and `quantity`.
+- **Issue and return.** `POST /api/issues` accepts `cadetId`. `POST /api/supplier-returns` accepts `supplierId`. Both accept optional `notes` and lines with `variantId` and `quantity`.
+- **Corrections.** Administrators send a `reason` to `POST /api/purchase-orders/ID/cancel` or `POST /api/{receipts,issues,supplier-returns,opening-balances}/ID/reverse`. `GET /api/opening-balances` lists previously posted opening balances for administrators.
+
+For a purchase order create, receipt, issue or supplier return, retry the same data with the same `requestId` to recover the original reference. The author can also use `GET /api/posting-status/{purchase-orders,receipts,issues,supplier-returns}/REQUEST_ID` to check whether the write succeeded. The browser keeps only the pending request ID in the current tab while the outcome is uncertain.
+
+### Branding and settings
+
+| Endpoint | Access and purpose |
+| --- | --- |
+| `GET /api/branding` and `GET /api/branding/{logo,cover}` | Public display names and images. |
+| `GET /api/about` | About Us for signed-in users who have completed any required password change. |
+| `GET /api/settings` and `POST /api/settings` | Administrators read or update `name`, `shortName` and `aboutUs`. |
+| `POST /api/branding/{logo,cover}` | Administrators upload base64 `content` or send `restore: true` with the previous `revision`. The browser can use the previous image if a replacement fails to render. |
