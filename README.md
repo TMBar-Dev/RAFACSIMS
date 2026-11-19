@@ -131,11 +131,9 @@ Record a D1 recovery point before deploying to an existing database. A Worker ve
 
 ### First sign-in
 
-Use this setup for a fresh database or a reserved `admin` account still on the retired credential.
+A fresh database starts with no accounts. Open `/api/session` on the deployed Worker to initialise its tables, then provision the first administrator through D1. Insert a username, a password hash, `role = 'admin'` and `must_change_password = 1` into `staff`. Sign in with that account and replace the temporary password. Additional accounts can be created in **Staff Accounts**.
 
-1. Set the Worker secret `ADMIN_BOOTSTRAP_PASSWORD` to a unique password of 16–128 characters.
-2. Sign in as `admin` and replace the temporary password when prompted.
-3. Verify sign-in with the new password, then remove the bootstrap secret.
+The stored format is `pbkdf2$100000$<salt>$<hash>`. Derive the 32-byte hash using PBKDF2-SHA256 with 100,000 iterations. Generate a random 32-byte salt and convert it to lowercase hex. Encode that hex salt as UTF-8 for PBKDF2, and store the digest in lowercase hex. See the [Worker password implementation](worker.js).
 
 Existing changed passwords survive redeployment. Sessions expire after 24 hours and use Secure, HttpOnly, SameSite cookies with hashed tokens in D1. Password changes and administrator actions such as username or role edits, resets and deactivation revoke affected sessions.
 
@@ -220,7 +218,7 @@ These routes require an administrator who has completed any mandatory password c
 | Endpoint | Request or result |
 | --- | --- |
 | `GET /api/staff?after=0` | Lists up to 25 accounts by ID in the `staff` array. Each entry includes an `account` with username, role, permissions, active status, password-change status and creation time. |
-| `POST /api/staff` | Send `username`, `password`, `role` and an explicit `permissions` array. Usernames are 2–40 characters and temporary passwords are 12–128 characters. The account must change its password at first sign-in. |
+| `POST /api/staff` | Send `username`, `password`, `role` and an explicit `permissions` array. Usernames are 2–40 characters and temporary passwords are 6–128 characters. The account must change its password at first sign-in. |
 | `POST /api/staff/ID/edit` | Send `username`, `role`, `previousUsername`, `previousRole`, `permissions` and `previousPermissions`. |
 | `POST /api/staff/ID/reset-password` | Send the temporary `password`. |
 | `POST /api/staff/ID/deactivate` and `POST /api/staff/ID/reactivate` | Send an empty JSON object. |

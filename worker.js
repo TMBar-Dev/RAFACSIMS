@@ -19,42 +19,13 @@ const ITERATIONS = 100000;
 const SESSION_SECONDS = 86400;
 // __Host- cookies require HTTPS, Secure, Path=/ and no Domain attribute.
 const COOKIE = '__Host-rafacsims';
-// Deny the retired public bootstrap hash, including pre-existing sessions.
-// It is never written to D1. A configured deployment secret can replace it.
-const RETIRED_BOOTSTRAP_HASH = 'pbkdf2$100000$475004062412af7965037c5326040053$ca2fda7f770b4c51d1b36f487286026209645347a4ef2bfd2a9b4ec29ba199ed';
+// Block the retired public administrator credential and sessions tied to it.
+const RETIRED_ADMIN_HASH = 'pbkdf2$100000$475004062412af7965037c5326040053$ca2fda7f770b4c51d1b36f487286026209645347a4ef2bfd2a9b4ec29ba199ed';
 // Shared by requests in this Worker isolate, not a replacement for D1 storage.
 let ready;
 
-const BOOTSTRAP_PERMISSIONS = `UPDATE staff SET permissions = ${ALL_PERMISSIONS}
-  WHERE username = 'admin' AND role = 'admin' AND password_hash != ?
-  AND permissions != ${ALL_PERMISSIONS}`;
-
-// Provision once on a new database, or replace the exact untouched legacy
-// credential. The predicates also protect against concurrent cold starts.
-async function provisionAdministrator(db, password) {
-  if (typeof password === 'string' && password.trim().length >= 16 && password.length <= 128) {
-    const existing = await db.prepare("SELECT password_hash, role, must_change_password FROM staff WHERE username = 'admin'").first();
-    if (!existing || (existing.password_hash === RETIRED_BOOTSTRAP_HASH && existing.role === 'admin' && existing.must_change_password)) {
-      const hash = await hashPassword(password);
-      await db.batch([
-        db.prepare(`INSERT OR IGNORE INTO staff (username, password_hash, role, must_change_password, permissions)
-          SELECT 'admin', ?, 'admin', 1, ${ALL_PERMISSIONS} WHERE NOT EXISTS (SELECT 1 FROM staff WHERE role = 'admin')`).bind(hash),
-        db.prepare(`UPDATE staff SET password_hash = ?
-          WHERE username = 'admin' AND role = 'admin' AND must_change_password = 1 AND password_hash = ?`)
-          .bind(hash, RETIRED_BOOTSTRAP_HASH),
-        db.prepare(`DELETE FROM sessions WHERE user_id IN (
-          SELECT id FROM staff WHERE username = 'admin' AND password_hash = ?
-        )`).bind(hash),
-        db.prepare(BOOTSTRAP_PERMISSIONS).bind(RETIRED_BOOTSTRAP_HASH)
-      ]);
-      return;
-    }
-  }
-  await db.prepare(BOOTSTRAP_PERMISSIONS).bind(RETIRED_BOOTSTRAP_HASH).run();
-}
-
 // Concurrent requests share the initialization promise; a failure permits retry.
-async function initialize(db, bootstrapPassword) {
+async function initialize(db) {
   if (!ready) ready = initializeStaffSchema(db).then(() => db.batch([
     db.prepare(`CREATE TABLE IF NOT EXISTS sessions (
       token_hash TEXT PRIMARY KEY,
@@ -69,7 +40,7 @@ async function initialize(db, bootstrapPassword) {
     ...ACCOUNT_ADMIN_SCHEMA.map(statement => db.prepare(statement)),
     ...BRANDING_SCHEMA.map(statement => db.prepare(statement)),
     ...MANAGEMENT_SCHEMA.map(statement => db.prepare(statement))
-  ])).then(() => provisionAdministrator(db, bootstrapPassword))
+  ]))
     .catch(error => { ready = undefined; throw error; });
   await ready;
 }
@@ -102,8 +73,8 @@ async function verifyPassword(password, stored) {
   return difference === 0;
 }
 function validatePassword(password) {
-  if (typeof password !== 'string' || password.length < 12 || password.length > 128)
-    fail('Choose a password between 12 and 128 characters.');
+  if (typeof password !== 'string' || password.length < 6 || password.length > 128)
+    fail('Choose a password between 6 and 128 characters.');
 }
 function publicUser(user) {
   // Explicit allowlist: never send password hashes or session records to clients.
@@ -142,7 +113,7 @@ async function currentSession(request, db) {
   return db.prepare(`SELECT staff.*, sessions.token_hash FROM sessions
     JOIN staff ON staff.id = sessions.user_id
     WHERE token_hash = ? AND expires_at > ? AND password_hash != ? AND ${ACCOUNT_ACTIVE}`)
-    .bind(await digest(token), Math.floor(Date.now() / 1000), RETIRED_BOOTSTRAP_HASH).first();
+    .bind(await digest(token), Math.floor(Date.now() / 1000), RETIRED_ADMIN_HASH).first();
 }
 async function issueSession(db, user) {
   const token = randomToken();
@@ -172,7 +143,7 @@ async function api(request, env) {
     if (!(request.headers.get('Content-Type') || '').startsWith('application/json')) fail('JSON required.', 415);
   }
   if (!env.DB) fail('Database binding DB is not configured.', 503);
-  await initialize(env.DB, env.ADMIN_BOOTSTRAP_PASSWORD);
+  await initialize(env.DB);
   if (request.method === 'GET') {
     if (path === '/api/branding') return json(await readBranding(env.DB));
     if (imageSlot) return serveBrandingImage(env.DB, imageSlot, url.searchParams.get('v'));
@@ -269,7 +240,7 @@ async function api(request, env) {
     if (typeof body.username !== 'string' || typeof body.password !== 'string' || body.password.length > 128) fail('Incorrect username or password.', 401);
     const user = await env.DB.prepare(`SELECT * FROM staff
       WHERE username = ? AND password_hash != ? AND ${ACCOUNT_ACTIVE}`)
-      .bind(body.username.trim(), RETIRED_BOOTSTRAP_HASH).first();
+      .bind(body.username.trim(), RETIRED_ADMIN_HASH).first();
     // Do the same password work when an account does not exist.
     // Workers only allow random values inside a request, not at module load.
     const hash = user?.password_hash ?? `pbkdf2$${ITERATIONS}$${randomToken()}$${'0'.repeat(64)}`;

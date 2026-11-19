@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { pbkdf2Sync } from 'node:crypto';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 
-const BOOTSTRAP = 'ReviewBootstrap!123';
+const INITIAL_ADMIN_PASSWORD = 'FixtureAdmin!123';
 const ALL_PERMISSIONS = ['issue-kit', 'return-kit', 'stores-demands'];
 
 // Real SQLite and Web Crypto with only D1's result/transaction shape adapted.
@@ -76,19 +77,25 @@ test('Staff Accounts and operational workflows', async t => {
     const response = await worker.fetch(new Request(`${origin}/api/${path}`, {
       method: body === undefined ? 'GET' : 'POST', headers,
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
-    }), { DB, ADMIN_BOOTSTRAP_PASSWORD: BOOTSTRAP });
+    }), { DB });
     return { status: response.status, data: await response.json(), cookie: response.headers.get('Set-Cookie')?.split(';')[0] };
   }
   const credentials = {
-    username: 'staff.login', password: 'TemporaryStaff!123', role: 'user'
+    username: 'staff.login', password: 'T9pX!2', role: 'user'
   };
   let adminCookie;
 
   await t.test('requires a changed administrator password and preserves the account across initialization', async () => {
+    assert.deepEqual((await request('session')).data, { user: null });
+    // Seed only the isolated database, using the format the Worker verifies.
+    const salt = 'staff-api-fixture-admin';
+    const hash = pbkdf2Sync(INITIAL_ADMIN_PASSWORD, salt, 100000, 32, 'sha256').toString('hex');
+    DB.database.prepare(`INSERT INTO staff (username, password_hash, role, must_change_password, permissions)
+      VALUES ('admin', ?, 'admin', 1, 7)`).run(`pbkdf2$100000$${salt}$${hash}`);
     assert.equal((await request('staff')).status, 401);
     assert.equal((await request('operations/access')).status, 401);
     assert.equal((await request('staff', { body: credentials })).status, 401);
-    const initial = await request('login', { body: { username: 'admin', password: BOOTSTRAP } });
+    const initial = await request('login', { body: { username: 'admin', password: INITIAL_ADMIN_PASSWORD } });
     assert.equal(initial.status, 200);
     assert.equal((await request('staff', { cookie: initial.cookie })).status, 403);
     assert.deepEqual(await request('operations/access', { cookie: initial.cookie }), {
@@ -96,7 +103,7 @@ test('Staff Accounts and operational workflows', async t => {
     });
     assert.equal((await request('staff', { cookie: initial.cookie, body: credentials })).status, 403);
     const changed = await request('change-password', { cookie: initial.cookie,
-      body: { currentPassword: BOOTSTRAP, newPassword: 'ChangedAdmin!123' } });
+      body: { currentPassword: INITIAL_ADMIN_PASSWORD, newPassword: 'ChangedAdmin!123' } });
     assert.equal(changed.status, 200);
     adminCookie = changed.cookie;
     const list = await request('staff', { cookie: adminCookie });
@@ -114,7 +121,7 @@ test('Staff Accounts and operational workflows', async t => {
     assert.equal(preserved.id, admin.id);
     assert.deepEqual(DB.database.prepare('SELECT * FROM staff WHERE id = ?').get(admin.id), stored);
     assert.equal((await request('login', { body: { username: 'admin', password: 'ChangedAdmin!123' } })).status, 200);
-    assert.equal((await request('login', { body: { username: 'admin', password: BOOTSTRAP } })).status, 401);
+    assert.equal((await request('login', { body: { username: 'admin', password: INITIAL_ADMIN_PASSWORD } })).status, 401);
   });
 
   await t.test('ordinary users and cross-origin requests cannot create staff logins', async () => {
@@ -141,14 +148,14 @@ test('Staff Accounts and operational workflows', async t => {
     assert.equal(login.status, 200);
     assert.equal(login.data.user.mustChangePassword, true);
     const changed = await request('change-password', { cookie: login.cookie,
-      body: { currentPassword: credentials.password, newPassword: 'ReplacementStaff!456' } });
+      body: { currentPassword: credentials.password, newPassword: 'K3rJ!7' } });
     assert.equal(changed.status, 200);
     assert.equal(changed.data.user.mustChangePassword, false);
     assert.equal((await request('session', { cookie: login.cookie })).data.user, null);
     assert.equal((await request('operations/access', { cookie: login.cookie })).status, 401);
     assert.equal((await request('operations/access', { cookie: changed.cookie })).status, 200);
     assert.equal((await request('login', { body: { username: credentials.username, password: credentials.password } })).status, 401);
-    assert.equal((await request('login', { body: { username: credentials.username, password: 'ReplacementStaff!456' } })).status, 200);
+    assert.equal((await request('login', { body: { username: credentials.username, password: 'K3rJ!7' } })).status, 200);
 
     assert.equal((await request('staff', { cookie: adminCookie,
       body: { ...credentials, username: 'staff.admin', role: 'admin' } })).status, 201);
@@ -285,7 +292,7 @@ test('Staff Accounts and operational workflows', async t => {
 
   await t.test('maintains searchable registers and restricts staff to active records and read access', async () => {
     const admin = { cookie: adminCookie };
-    const staff = await request('login', { body: { username: credentials.username, password: 'ReplacementStaff!456' } });
+    const staff = await request('login', { body: { username: credentials.username, password: 'K3rJ!7' } });
     const staffSession = { cookie: staff.cookie };
     const ordinary = await request('login', { body: { username: 'ordinary', password: 'OrdinaryPass!123' } });
     const cadet = { first_name: 'Alex', last_name: 'Example', service_number: 'C-100', status: 'active', date_joined: '2024-02-29' };
@@ -333,7 +340,7 @@ test('Staff Accounts and operational workflows', async t => {
 
   await t.test('saves pending orders atomically, keeps line identities, and leaves stock unchanged', async () => {
     const admin = { cookie: adminCookie };
-    const staff = await request('login', { body: { username: credentials.username, password: 'ReplacementStaff!456' } });
+    const staff = await request('login', { body: { username: credentials.username, password: 'K3rJ!7' } });
     const staffSession = { cookie: staff.cookie };
     const ordinary = await request('login', { body: { username: 'ordinary', password: 'OrdinaryPass!123' } });
     const { id: supplierId } = (await request('suppliers?q=uniform%20supply', admin)).data.records[0];
@@ -398,7 +405,7 @@ test('Staff Accounts and operational workflows', async t => {
 
   await t.test('receives purchases, posts stock and maintains one back order through repeat deliveries', async () => {
     const admin = { cookie: adminCookie };
-    const login = await request('login', { body: { username: credentials.username, password: 'ReplacementStaff!456' } });
+    const login = await request('login', { body: { username: credentials.username, password: 'K3rJ!7' } });
     const staff = { cookie: login.cookie };
     const supplier = (await request('suppliers', { ...admin, body: { name: 'Ledger supplier', status: 'active' } })).data.id;
     const item = (await request('catalog', { ...admin, body: {
@@ -465,7 +472,7 @@ test('Staff Accounts and operational workflows', async t => {
 
   await t.test('issues and returns stock, preserves cadet kit history and audits corrections', async () => {
     const admin = { cookie: adminCookie };
-    const login = await request('login', { body: { username: credentials.username, password: 'ReplacementStaff!456' } });
+    const login = await request('login', { body: { username: credentials.username, password: 'K3rJ!7' } });
     const staff = { cookie: login.cookie };
     const { id: supplier } = (await request('suppliers?q=Ledger%20supplier', staff)).data.records[0];
     const { id: item } = (await request(`catalog?supplierId=${supplier}`, staff)).data.records[0];

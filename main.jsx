@@ -323,7 +323,7 @@ function App() {
               <Typography variant="h5" component="h1">Change your password</Typography>
               <p>{user.mustChangePassword ? 'You must replace your initial password before continuing.' : 'Choose a new password for your account.'}</p>
               <TextField fullWidth required label="Current password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
-              <TextField fullWidth required label="New password" type="password" autoComplete="new-password" value={newPassword} slotProps={{ htmlInput: { minLength: 12, maxLength: 128 } }} onChange={e => setNewPassword(e.target.value)} helperText="Use 12–128 characters." />
+              <TextField fullWidth required label="New password" type="password" autoComplete="new-password" value={newPassword} slotProps={{ htmlInput: { minLength: 6, maxLength: 128 } }} onChange={e => setNewPassword(e.target.value)} helperText="Use 6–128 characters." />
               <TextField fullWidth required label="Confirm new password" type="password" autoComplete="new-password" value={confirmation} onChange={e => setConfirmation(e.target.value)} />
               <Button type="submit" variant="contained" color="primary" disabled={busy}>Save password</Button>
             </form>
@@ -335,7 +335,7 @@ function App() {
               <TextField fullWidth required label="Password" type="password" autoComplete="current-password" value={password} slotProps={{ htmlInput: { maxLength: 128 } }} onChange={e => setPassword(e.target.value)} />
               <Button type="submit" variant="contained" color="primary" disabled={busy}>Sign in</Button>
               <Button type="button" disabled={busy} onClick={register}>Register</Button>
-              <p>New accounts require a password of at least 12 characters.</p>
+              <p>New accounts require a password of at least 6 characters.</p>
             </form>
           )}
           {message && <p role="status" aria-live="polite">{message}</p>}

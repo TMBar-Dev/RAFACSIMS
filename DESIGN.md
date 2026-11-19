@@ -58,7 +58,7 @@ Register and transaction lists use search and cursor pagination with stable ID o
 
 - **Live access checks.** The Worker checks the session, current role and required workflow permission on protected requests. Navigation reflects the same permissions.
 - **Account changes.** Username or role edits, administrator resets and deactivation revoke the target user's sessions. Reactivation preserves a pending password change and requires a new sign-in.
-- **Administrator continuity.** Administrators manage other users. Writes recheck the acting administrator and protect the last administrator who can sign in and use the app, including during concurrent changes. The bootstrap username `admin` is reserved.
+- **Administrator continuity.** Administrators manage other users. Writes recheck the acting administrator and protect the last administrator who can sign in and use the app, including during concurrent changes. The username `admin` is reserved.
 - **Staff creation.** Administrators create accounts with a username, temporary password, role and stores permissions. A single `staff` row stores each login. Cadet records have their own identities.
 
 ## Order and stock rules
@@ -101,7 +101,7 @@ Legacy deployments migrate with transactional table renames before handling API 
 - **Prevent partial writes.** D1 batches commit related records together. Database checks enforce order remainders and stock availability even when requests compete.
 - **Recover interrupted saves.** Store a request ID with a new order or transaction. A matching retry can return the original reference, and the author can check its posting status before initiating another write.
 - **Catch stale edits.** Register and purchase-order edits include the version read by the editor. The API rejects a stale version so it cannot overwrite a newer save.
-- **Limit public access.** Metadata and image slots are public for the sign-in screen. About Us requires sign-in and completion of any mandatory password change. Fresh administrator provisioning requires a deployment secret.
+- **Limit public access.** Metadata and image slots are public for the sign-in screen. About Us requires sign-in and completion of any mandatory password change. Fresh databases require an explicitly provisioned administrator account.
 
 The Worker accepts same-origin JSON writes with bounded bodies and serves bounded list pages. See the [API reference](README.md#api).
 

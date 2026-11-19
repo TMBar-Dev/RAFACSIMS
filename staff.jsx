@@ -43,7 +43,7 @@ function AccountActions({ account, saving, error, onSave, onClose, onActionChang
   const [confirmation, setConfirmation] = useState('');
   const [validation, setValidation] = useState('');
   const heading = useRef(null);
-  const bootstrap = account.username.toLowerCase() === 'admin';
+  const reservedUsername = account.username.toLowerCase() === 'admin';
   const accessAction = account.active ? 'deactivate' : 'reactivate';
   const accessLabel = account.active ? 'Deactivate' : 'Reactivate';
 
@@ -90,9 +90,9 @@ function AccountActions({ account, saving, error, onSave, onClose, onActionChang
           {action === 'edit' ? (
             <>
               <div className="detail-grid">
-                <TextField required disabled={bootstrap} label="Username" variant="outlined" size="small" value={username}
+                <TextField required disabled={reservedUsername} label="Username" variant="outlined" size="small" value={username}
                   onChange={event => setUsername(event.target.value)}
-                  helperText={bootstrap ? 'Reserved for the bootstrap account.' : usernameHelp}
+                  helperText={reservedUsername ? 'This username is reserved.' : usernameHelp}
                   slotProps={{ htmlInput: usernameInput }} />
                 <TextField required select label="Role" variant="outlined" size="small" value={role}
                   onChange={event => setRole(event.target.value)} slotProps={{ select: { native: true } }}>
@@ -108,10 +108,10 @@ function AccountActions({ account, saving, error, onSave, onClose, onActionChang
               <div className="detail-grid">
                 <TextField required label="Temporary password" type="password" autoComplete="new-password"
                   variant="outlined" size="small" value={password} onChange={event => setPassword(event.target.value)}
-                  slotProps={{ htmlInput: { minLength: 12, maxLength: 128 } }} />
+                  slotProps={{ htmlInput: { minLength: 6, maxLength: 128 } }} />
                 <TextField required label="Confirm temporary password" type="password" autoComplete="new-password"
                   variant="outlined" size="small" value={confirmation} onChange={event => setConfirmation(event.target.value)}
-                  slotProps={{ htmlInput: { minLength: 12, maxLength: 128 } }} />
+                  slotProps={{ htmlInput: { minLength: 6, maxLength: 128 } }} />
               </div>
               <p className="muted">The user is signed out and must replace the temporary password on their next sign-in.</p>
             </>
@@ -240,8 +240,8 @@ export default function StaffAccounts({ request, currentUser }) {
               slotProps={{ htmlInput: usernameInput }} helperText={usernameHelp} />
             <TextField required disabled={disabled} label="Password" type="password"
               variant="outlined" size="small" autoComplete="new-password" value={password}
-              onChange={event => setPassword(event.target.value)} slotProps={{ htmlInput: { minLength: 12, maxLength: 128 } }}
-              helperText="12–128 characters. The user must change it at first sign-in." />
+              onChange={event => setPassword(event.target.value)} slotProps={{ htmlInput: { minLength: 6, maxLength: 128 } }}
+              helperText="6–128 characters. The user must change it at first sign-in." />
             <TextField required disabled={disabled} select label="Role" variant="outlined" size="small"
               slotProps={{ select: { native: true } }} value={role} onChange={event => setRole(event.target.value)}>
               <option value="user">User</option>

@@ -43,7 +43,7 @@ export async function administerAccount(db, actor, targetId, action, body, prepa
       if (!/^[a-zA-Z0-9_.-]{2,40}$/.test(username))
         fail('Username must contain 2–40 letters, numbers, dots, underscores or hyphens.');
       if (username !== target.username && [username, target.username].some(name => name.toLowerCase() === 'admin'))
-        fail('The bootstrap administrator username is reserved.', 409);
+        fail('The administrator username is reserved.', 409);
       if (!['admin', 'user'].includes(body.role)) fail('Choose a valid account role.');
       if (body.previousUsername !== target.username || body.previousRole !== target.role)
         fail('The account changed. Refresh the account list and try again.', 409);

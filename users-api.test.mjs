@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { pbkdf2Sync } from 'node:crypto';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 
-const BOOTSTRAP = 'ReviewBootstrap!123';
+const INITIAL_ADMIN_PASSWORD = 'FixtureAdmin!123';
 
 // Isolated API checks: real SQLite statements and Web Crypto, with a small D1
 // result-shape adapter. No network, production database or account is touched.
@@ -66,7 +67,7 @@ test('User Management, settings and account regressions', async t => {
     return worker.fetch(new Request(`${origin}/api/${path}`, {
       method: body === undefined ? 'GET' : 'POST', headers,
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
-    }), { DB, ADMIN_BOOTSTRAP_PASSWORD: BOOTSTRAP });
+    }), { DB });
   }
   async function request(path, options) {
     const response = await fetchApi(path, options);
@@ -80,15 +81,21 @@ test('User Management, settings and account regressions', async t => {
   let adminCookie;
 
   await t.test('requires authentication and a changed admin password', async () => {
+    assert.deepEqual((await request('session')).data, { user: null });
+    // Seed only the isolated database, using the format the Worker verifies.
+    const salt = 'users-api-fixture-admin';
+    const hash = pbkdf2Sync(INITIAL_ADMIN_PASSWORD, salt, 100000, 32, 'sha256').toString('hex');
+    DB.database.prepare(`INSERT INTO staff (username, password_hash, role, must_change_password, permissions)
+      VALUES ('admin', ?, 'admin', 1, 7)`).run(`pbkdf2$100000$${salt}$${hash}`);
     assert.equal((await request('users')).status, 401);
     assert.equal((await request('users', { body: account })).status, 401);
-    const initial = await request('login', { body: { username: 'admin', password: BOOTSTRAP } });
+    const initial = await request('login', { body: { username: 'admin', password: INITIAL_ADMIN_PASSWORD } });
     assert.equal(initial.status, 200);
     assert.equal(initial.data.user.mustChangePassword, true);
     assert.equal((await request('users', { cookie: initial.cookie })).status, 403);
     assert.equal((await request('users', { cookie: initial.cookie, body: account })).status, 403);
     const changed = await request('change-password', { cookie: initial.cookie,
-      body: { currentPassword: BOOTSTRAP, newPassword: 'ChangedAdmin!123' } });
+      body: { currentPassword: INITIAL_ADMIN_PASSWORD, newPassword: 'ChangedAdmin!123' } });
     assert.equal(changed.status, 200);
     adminCookie = changed.cookie;
     assert.notEqual(adminCookie, initial.cookie);
@@ -98,9 +105,9 @@ test('User Management, settings and account regressions', async t => {
   });
 
   await t.test('ordinary registration cannot grant administrator permissions', async () => {
-    const registered = await request('register', { body: { username: 'ordinary', password: 'OrdinaryPass!123', role: 'admin' } });
+    const registered = await request('register', { body: { username: 'ordinary', password: 'U4sW!9', role: 'admin' } });
     assert.equal(registered.status, 201);
-    const login = await request('login', { body: { username: 'ordinary', password: 'OrdinaryPass!123' } });
+    const login = await request('login', { body: { username: 'ordinary', password: 'U4sW!9' } });
     assert.equal(login.status, 200);
     assert.equal(login.data.user.role, 'user');
     assert.equal((await request('users', { cookie: login.cookie })).status, 403);
@@ -195,7 +202,7 @@ test('User Management, settings and account regressions', async t => {
     assert.equal(renamed.status, 200);
     assert.equal((await request('operations/access', { cookie: renamed.cookie })).status, 200);
 
-    const temporary = 'ResetTemporary!789';
+    const temporary = 'T1mR!2';
     assert.equal((await request(`${userPath}/reset-password`, { ...admin, body: { password: oldPassword } })).status, 400);
     assert.equal((await request(`${userPath}/reset-password`, { ...admin, body: { password: temporary } })).status, 200);
     assert.equal((await request('session', { cookie: renamed.cookie })).data.user, null);
@@ -258,7 +265,7 @@ test('User Management, settings and account regressions', async t => {
 
   await t.test('stores administrator-only settings and serves verified branding without replacing a saved image on failure', async () => {
     const admin = { cookie: adminCookie };
-    const ordinary = await request('login', { body: { username: 'ordinary', password: 'OrdinaryPass!123' } });
+    const ordinary = await request('login', { body: { username: 'ordinary', password: 'U4sW!9' } });
     const values = { name: 'Fixture Squadron Stores', shortName: 'Fixture Stores', aboutUs: 'Test information\nFor signed-in users' };
     assert.deepEqual((await request('branding')).data, {
       name: 'RAFACSIMS', shortName: 'RAFACSIMS', logoUrl: null, coverUrl: null
@@ -338,10 +345,10 @@ test('User Management, settings and account regressions', async t => {
   });
 
   await t.test('requires another ready administrator and serializes competing deactivations', async () => {
-    const bootstrapId = DB.database.prepare("SELECT id FROM staff WHERE username = 'admin'").get().id;
+    const adminId = DB.database.prepare("SELECT id FROM staff WHERE username = 'admin'").get().id;
     const secondId = DB.database.prepare("SELECT id FROM staff WHERE username = 'second.admin'").get().id;
-    assert.equal((await request(`users/${bootstrapId}/deactivate`, { cookie: adminCookie, body: {} })).status, 409);
-    assert.equal((await request(`users/${bootstrapId}/reset-password`, { cookie: adminCookie, body: {
+    assert.equal((await request(`users/${adminId}/deactivate`, { cookie: adminCookie, body: {} })).status, 409);
+    assert.equal((await request(`users/${adminId}/reset-password`, { cookie: adminCookie, body: {
       password: 'NewAdminTemporary!123'
     } })).status, 409);
     const second = await request('login', { body: { username: 'second.admin', password: account.password } });
@@ -350,12 +357,12 @@ test('User Management, settings and account regressions', async t => {
       currentPassword: account.password, newPassword: 'ReadySecondAdmin!123'
     } });
     assert.equal(changed.status, 200);
-    assert.equal((await request(`users/${bootstrapId}/edit`, { cookie: changed.cookie, body: {
+    assert.equal((await request(`users/${adminId}/edit`, { cookie: changed.cookie, body: {
       username: 'admin-new', role: 'admin', previousUsername: 'admin', previousRole: 'admin'
     } })).status, 409);
     const results = await Promise.all([
       request(`users/${secondId}/deactivate`, { cookie: adminCookie, body: {} }),
-      request(`users/${bootstrapId}/deactivate`, { cookie: changed.cookie, body: {} })
+      request(`users/${adminId}/deactivate`, { cookie: changed.cookie, body: {} })
     ]);
     assert.equal(results.filter(result => result.status === 200).length, 1);
     assert.ok(results.every(result => [200, 401, 409].includes(result.status)));
@@ -365,17 +372,12 @@ test('User Management, settings and account regressions', async t => {
   });
 });
 
-test('a fresh database requires deployment-controlled administrator provisioning', async t => {
+test('initializing a fresh database does not create accounts', async t => {
   const DB = new TestD1();
   t.after(() => DB.database.close());
-  const { default: worker } = await import('./worker.js?review-no-bootstrap');
+  const { default: worker } = await import('./worker.js?review-fresh-db');
   const response = await worker.fetch(new Request('https://rafacsims.example/api/session'), { DB });
+  assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { user: null });
-  assert.equal(DB.database.prepare("SELECT id FROM staff WHERE username = 'admin'").get(), undefined);
-  const { default: provisioned } = await import('./worker.js?review-with-bootstrap');
-  const enabled = await provisioned.fetch(new Request('https://rafacsims.example/api/session'), {
-    DB, ADMIN_BOOTSTRAP_PASSWORD: BOOTSTRAP
-  });
-  assert.equal(enabled.status, 200);
-  assert.equal(DB.database.prepare("SELECT must_change_password FROM staff WHERE username = 'admin'").get().must_change_password, 1);
+  assert.equal(DB.database.prepare('SELECT count(*) AS total FROM staff').get().total, 0);
 });
