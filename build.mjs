@@ -14,7 +14,7 @@ if (relative(root, outdir) !== 'build') throw new Error('Invalid build directory
 await rm(outdir, { recursive: true, force: true });
 await mkdir(outdir, { recursive: true });
 // Copy only public files. The Worker, sources and configuration stay private.
-for (const asset of ['favicon.ico', 'manifest.json', 'robots.txt']) {
+for (const asset of ['favicon.ico', 'apple-touch-icon.png', 'app-icon-192.png', 'app-icon-512.png', 'manifest.json', 'robots.txt']) {
   await cp(resolve(root, asset), resolve(outdir, asset));
 }
 

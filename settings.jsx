@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Button, Card, TextField, Typography } from '@material-ui/core';
 import { useResource } from './management-ui.jsx';
 import { usePosting } from './inventory-ui.jsx';
+import storesCover from './stores-cover.jpg';
 
 const imageOptions = {
   logo: { label: 'Logo', maxKiB: 128, dimension: 1024 },
@@ -74,6 +75,8 @@ function BrandingImage({ request, slot, initialUrl, initialFallback, onUpdated }
     return () => URL.revokeObjectURL(objectUrl);
   }, [file]);
   const selectedPreview = file && preview?.file === file ? preview.url : null;
+  const builtIn = slot === 'logo' ? '/app-icon-192.png' : storesCover;
+  const previewLabel = selectedPreview ? 'Selected' : url ? 'Saved' : 'Built-in';
 
   function complete(data) {
     const key = `${slot}Url`;
@@ -132,10 +135,9 @@ function BrandingImage({ request, slot, initialUrl, initialFallback, onUpdated }
   return (
     <Card className="workspace-card" variant="outlined">
       <Typography component="h2" variant="h6">{label}</Typography>
-      {selectedPreview || url
-        ? <img className={`branding-preview branding-preview-${slot}`} src={selectedPreview || url}
-            alt={`${selectedPreview ? 'Selected' : 'Saved'} ${label.toLowerCase()} preview`} />
-        : <p className="muted">Using the built-in branding.</p>}
+      <img className={`branding-preview branding-preview-${slot}`} src={selectedPreview || url || builtIn}
+        alt={`${previewLabel} ${label.toLowerCase()} preview`} />
+      {!selectedPreview && !url && <p className="muted">Using the built-in {label.toLowerCase()}.</p>}
       <form onSubmit={upload} aria-busy={busy}>
         <fieldset className="record-fieldset" disabled={busy}>
           <label className="branding-file">

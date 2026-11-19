@@ -98,6 +98,12 @@ Creating an account through User Management does not create a staff-profile reco
 
 The short name and logo appear in the app bar. The system name is used for the page title and the cover is used behind the sign-in screen. About Us appears as plain text on the signed-in dashboard.
 
+The built-in identity uses the carton mark in `favicon.ico`, `apple-touch-icon.png`, `app-icon-192.png` and `app-icon-512.png`. The browser manifest and Settings preview use the same icon artwork. The bundled `stores-cover.jpg` is the default sign-in cover. Saved logos and covers take precedence in the app.
+
+The cover was created with the built-in ImageGen tool and saved as an optimised JPEG. The generation prompt was:
+
+> Photorealistic editorial cover photograph for a modern RAF Air Cadets squadron stores inventory web app. Wide landscape image, a tidy stack of folded plain RAF-blue shirts and dark navy uniform knitwear beside a pair of polished black parade boots on a light utilitarian shelf. Keep the objects grouped to the LEFT with comfortable framing and generous quiet dark slate-blue negative space on the RIGHT for an overlaid sign-in card. Use natural side light, tactile fabric and leather, subtle grain, dark ink-blue and desaturated blue-grey palette. A contemporary product photograph, grounded and recognisably about uniform stores. No people, insignia, logos, badges, weapons, aircraft, lettering or watermarks. No UI in the image.
+
 The app stores two image slots in the existing D1 binding. The logo accepts PNG or JPEG up to 128 KiB and 1,024 pixels per side. The cover accepts PNG or JPEG up to 512 KiB and 2,560 pixels per side. The Worker validates the image structure and dimensions before replacing a saved slot. Uploads are served only from the two branding image endpoints. [Cloudflare D1 limits](https://developers.cloudflare.com/d1/platform/limits/)
 
 ### Page and User Management change review: 17 November 2026
@@ -230,7 +236,7 @@ The unused Express/MySQL backend and its duplicate dependency manifests have bee
 - users-api.test.mjs: isolated SQLite-backed API checks, invoked with npm test; not a live D1 or frontend/browser test.
 - staff-api.test.mjs: isolated checks for staff permissions, account linking/creation and admin-profile preservation; not a live D1 or frontend/browser test.
 - index.html: HTML template used by build.mjs.
-- bg.jpg, favicon.ico, manifest.json and robots.txt: public assets.
+- favicon.ico, apple-touch-icon.png, app-icon-192.png, app-icon-512.png, manifest.json and robots.txt are copied as public assets. The sign-in cover is bundled separately from stores-cover.jpg.
 - build.mjs: builds the frontend into build/ and copies only the explicitly listed public files.
 - wrangler.jsonc: deploys worker.js and build/ together.
 - package.json and package-lock.json: dependencies and npm commands.
@@ -254,6 +260,6 @@ Use npm audit --package-lock-only to inspect both production and development dep
 
 Every changed or moved file must be reviewed against the previous Git version. Check frontend state/forms, API requests and responses, session cookies, password-change enforcement, D1 identifiers, static asset paths and deployment configuration. Comments explain the non-obvious behavior in main.jsx, worker.js, build.mjs and wrangler.jsonc. JSON manifests and the generated lockfile are documented here instead of containing comments.
 
-package.json pins the browser dependencies (React, ReactDOM, Material UI and Roboto) and esbuild as the build dependency. package-lock.json records their resolved versions and integrity hashes; regenerate it using npm 10.9.2 rather than editing dependency records by hand. manifest.json describes the browser's app name, launch URL and favicon. robots.txt currently permits crawler access; it is not an authorization mechanism.
+package.json pins the browser dependencies (React, ReactDOM, Material UI and Roboto) and esbuild as the build dependency. package-lock.json records their resolved versions and integrity hashes; regenerate it using npm 10.9.2 rather than editing dependency records by hand. manifest.json describes the browser's app name, launch URL, colours and home-screen icons. robots.txt currently permits crawler access; it is not an authorization mechanism.
 
 The dated review sections above separate the folder-consolidation comparison from the later template changes. Update each with its actual static, deployment and browser-verification results when those checks have been completed; do not carry a prior change's verification forward as proof for a new change.

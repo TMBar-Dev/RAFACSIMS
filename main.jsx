@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import './App.css';
+import storesCover from './stores-cover.jpg';
 import '@fontsource/roboto/400.css';
 import '@fontsource/roboto/500.css';
 import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@material-ui/core';
+import { createMuiTheme, ThemeProvider } from '@material-ui/core/styles';
 import { Dashboard, PAGES, canViewPage, pageHref, readPageHash, visiblePages } from './templates.jsx';
 import UserManagement from './users.jsx';
 import StaffAccounts from './staff.jsx';
@@ -16,6 +18,10 @@ import SettingsPage from './settings.jsx';
 
 const transactionPages = ['receipts', 'issues', 'supplier-returns'];
 const printPages = ['orders', 'back-orders', ...transactionPages];
+const theme = createMuiTheme({
+  palette: { primary: { main: '#23415d' }, secondary: { main: '#9d3931' } },
+  shape: { borderRadius: 8 }
+});
 
 // The interface and API share an origin. The browser sends the HttpOnly session
 // cookie automatically; JavaScript never needs to read or store its token.
@@ -255,14 +261,15 @@ function App() {
   // Account forms keep their original handlers. Only the old signed-in welcome
   // panel is expanded into a navigable workspace; protected pages mount last.
   return (
-    <div className={showWorkspace && printPages.includes(page) ? 'App print-record-page' : 'App'}
-      style={!showWorkspace && coverUrl ? { backgroundImage: `url("${coverUrl}")` } : undefined}>
-      <AppBar position="static"><Toolbar className="app-toolbar">
+    <div className={showWorkspace ? (printPages.includes(page) ? 'App print-record-page' : 'App') : 'App account-app'}
+      style={!showWorkspace ? { '--account-cover': `url("${coverUrl || storesCover}")` } : undefined}>
+      <AppBar position="static" elevation={0} className="brand-bar"><Toolbar className="app-toolbar">
         <div className="app-brand">
-          {logoUrl && <img src={logoUrl} alt="" onError={() => setLogoFailure({
-            primary: branding.logoUrl, hidden: logoUrl === branding.logoFallbackUrl
-          })} />}
-          <Typography variant="h6">{shortName}</Typography>
+          <img className={logoUrl ? undefined : 'default-brand-mark'} src={logoUrl || '/app-icon-192.png'} alt=""
+            onError={logoUrl ? () => setLogoFailure({
+              primary: branding.logoUrl, hidden: logoUrl === branding.logoFallbackUrl
+            }) : undefined} />
+          <Typography className="app-brand-title" variant="h6">{shortName}</Typography>
         </div>
         {user && <div className="account-controls">
           <span className="signed-in-name">{user.username}</span>
@@ -328,4 +335,4 @@ function App() {
   );
 }
 
-ReactDOM.render(<App />, document.getElementById('root'));
+ReactDOM.render(<ThemeProvider theme={theme}><App /></ThemeProvider>, document.getElementById('root'));
