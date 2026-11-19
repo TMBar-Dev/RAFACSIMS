@@ -4,7 +4,7 @@ import './App.css';
 import storesCover from './stores-cover.jpg';
 import '@fontsource/roboto/400.css';
 import '@fontsource/roboto/500.css';
-import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@mui/material';
+import { AppBar, Toolbar, Button, Card, Switch, TextField, Typography } from '@mui/material';
 import { createTheme, StyledEngineProvider, ThemeProvider } from '@mui/material/styles';
 import { Dashboard, PAGES, WorkspaceNavigation, canViewPage, pageHref, readPageHash } from './templates.jsx';
 import StaffAccounts from './staff.jsx';
@@ -17,8 +17,11 @@ import SettingsPage from './settings.jsx';
 
 const transactionPages = ['receipts', 'issues', 'supplier-returns'];
 const printPages = ['orders', 'back-orders', ...transactionPages];
-const theme = createTheme({
-  palette: { primary: { main: '#23415d' }, secondary: { main: '#9d3931' } },
+const createAppTheme = mode => createTheme({
+  palette: mode === 'dark' ? {
+    mode, primary: { main: '#9bc9f8' }, secondary: { main: '#f3a49b' },
+    background: { default: '#101a26', paper: '#182737' }
+  } : { mode, primary: { main: '#23415d' }, secondary: { main: '#9d3931' } },
   shape: { borderRadius: 8 },
   components: {
     // Preserve the sign-in fields and neutral buttons that used v4 defaults.
@@ -26,6 +29,9 @@ const theme = createTheme({
     MuiButton: { defaultProps: { color: 'inherit' } }
   }
 });
+
+const themes = { light: createAppTheme('light'), dark: createAppTheme('dark') };
+const THEME_STORAGE_KEY = 'rafacsims.theme';
 
 // The interface and API share an origin. The browser sends the HttpOnly session
 // cookie automatically; JavaScript never needs to read or store its token.
@@ -43,7 +49,7 @@ async function requestApi(path, body) {
   return response.json();
 }
 
-function App() {
+function App({ mode, onModeChange }) {
   // `user` contains only the public account fields returned by worker.js.
   const [user, setUser] = useState(null);
   const activeUser = useRef(null);
@@ -279,7 +285,7 @@ function App() {
   // Account forms keep their original handlers. Only the old signed-in welcome
   // panel is expanded into a navigable workspace; protected pages mount last.
   return (
-    <div className={showWorkspace ? (printPages.includes(page) ? 'App print-record-page' : 'App') : 'App account-app'}
+    <div data-theme={mode} className={showWorkspace ? (printPages.includes(page) ? 'App print-record-page' : 'App') : 'App account-app'}
       style={!showWorkspace ? { '--account-cover': `url("${coverUrl || storesCover}")` } : undefined}>
       <AppBar position="static" elevation={0} className="brand-bar"><Toolbar className="app-toolbar">
         <div className="app-brand">
@@ -289,12 +295,20 @@ function App() {
             }) : undefined} />
           <Typography className="app-brand-title" variant="h6">{shortName}</Typography>
         </div>
-        {user && <div className="account-controls">
+        <div className="account-controls">
+          {user && <>
           <span className="signed-in-name">{user.username}</span>
           {showWorkspace && <Button color="inherit" disabled={busy}
             onClick={() => { setChangingPassword(true); setMessage(''); }}>Change password</Button>}
           <Button color="inherit" disabled={busy} onClick={logout}>Log out</Button>
-        </div>}
+          </>}
+          <label className="theme-toggle">
+            <Switch size="small" color="default" checked={mode === 'dark'}
+              onChange={event => onModeChange(event.target.checked ? 'dark' : 'light')}
+              slotProps={{ input: { role: 'switch' } }} />
+            Dark mode
+          </label>
+        </div>
       </Toolbar></AppBar>
       {user && idleWarning && <p className="message-banner screen-only" role="status">Your session will expire soon due to inactivity.</p>}
       <main className={showWorkspace ? 'workspace' : 'account-area'}>
@@ -343,9 +357,24 @@ function App() {
   );
 }
 
+function AppAppearance() {
+  const [mode, setMode] = useState(() => {
+    try { return localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light'; }
+    catch { return 'light'; }
+  });
+
+  function changeMode(nextMode) {
+    setMode(nextMode);
+    // Moving between sign-in and the workspace must not reset the choice.
+    try { localStorage.setItem(THEME_STORAGE_KEY, nextMode); } catch { /* Keep the choice for this page. */ }
+  }
+
+  return <ThemeProvider theme={themes[mode]}><App mode={mode} onModeChange={changeMode} /></ThemeProvider>;
+}
+
 // Insert Emotion styles first so App.css can continue overriding MUI defaults.
 createRoot(document.getElementById('root')).render(
   <StyledEngineProvider injectFirst>
-    <ThemeProvider theme={theme}><App /></ThemeProvider>
+    <AppAppearance />
   </StyledEngineProvider>
 );
