@@ -18,7 +18,6 @@ const COOKIE = '__Host-rafacsims';
 // Deny the retired public bootstrap hash, including pre-existing sessions.
 // It is never written to D1. A configured deployment secret can replace it.
 const RETIRED_BOOTSTRAP_HASH = 'pbkdf2$100000$475004062412af7965037c5326040053$ca2fda7f770b4c51d1b36f487286026209645347a4ef2bfd2a9b4ec29ba199ed';
-const DUMMY_PASSWORD_HASH = `pbkdf2$${ITERATIONS}$${randomToken()}$${'0'.repeat(64)}`;
 // Shared by requests in this Worker isolate, not a replacement for D1 storage.
 let ready;
 
@@ -294,7 +293,9 @@ async function api(request, env) {
       WHERE username = ? AND password_hash != ? AND ${ACCOUNT_ACTIVE}`)
       .bind(body.username.trim(), RETIRED_BOOTSTRAP_HASH).first();
     // Do the same password work when an account does not exist.
-    const valid = await verifyPassword(body.password, user?.password_hash || DUMMY_PASSWORD_HASH);
+    // Workers only allow random values inside a request, not at module load.
+    const hash = user?.password_hash ?? `pbkdf2$${ITERATIONS}$${randomToken()}$${'0'.repeat(64)}`;
+    const valid = await verifyPassword(body.password, hash);
     if (!user || !valid) fail('Incorrect username or password.', 401);
     const token = await issueSession(env.DB, user);
     await env.DB.prepare('DELETE FROM sessions WHERE expires_at <= ?').bind(Math.floor(Date.now() / 1000)).run();
