@@ -179,7 +179,7 @@ Remove any previous `--assets` command-line argument: wrangler.jsonc configures 
 
 ### Weekly deployment
 
-The existing `rafacsims` Cloudflare Worker requests a rebuild of `main` every Monday at 03:00 UTC, including weeks without new commits. The normal Workers Builds deployment applies the cron in `wrangler.jsonc`. Manual pushes use their separate hook.
+The existing `rafacsims` Cloudflare Worker requests a rebuild of `main` every Monday at 03:00 UTC, including weeks without new commits. The schedule is managed under Trigger Events in the Cloudflare dashboard. Keep the cron declaration omitted from `wrangler.jsonc` so deployments leave the dashboard trigger in place. Manual pushes use their separate hook.
 
 In Cloudflare, set `CLOUDFLARE_DEPLOY_HOOK_URL` as a runtime Worker secret on `rafacsims` using the URL saved in the ignored `.env.cloudflare-nightly-deploy-hook` file. After deployment, confirm the cron trigger and check Workers Logs for the build ID and status. The scheduled rebuild uses the current branch, so code defects still require a fix or rollback.
 
