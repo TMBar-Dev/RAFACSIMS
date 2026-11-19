@@ -1,96 +1,88 @@
 # CAT SIMS design based on SIS V1
 
-18 November 2026 · Design for review
+Reviewed 19 November 2026 against implementation commit `0f9a805`.
 
-## Scope and reference
+## Scope and release status
 
-Reproduce the SIS V1 workflows for ordering, receiving, stock, uniform issue, supplier returns, cadet kit and administration in the current CAT SIMS application. The existing React interface and Cloudflare Worker with D1 are the starting point. Preserve the current top-level source layout, production D1 binding, credentials and sessions. Staff accounts require only **Username**, **Password** and **Role**. Cadet names remain part of cadet records.
+Phases 1–6 implement the core V1 workflows in the existing React application, Cloudflare Worker and D1 database. The isolated suite passed 23 tests for this commit. Cloudflare build and deployed browser verification remain open in the [release checklist](TODO.md).
 
-The review uses the active PHP tree in `V1/SIS`, the root SQL export (`V1/sis_db.sql`) and the bundled SQL export (`V1/SIS/database/sms_db.sql`). When these disagree, the visible PHP screens and their handlers establish intended behaviour where possible. The SQL exports describe possible source data shapes. The outer XAMPP dashboard is installation material, and `V1/Old version` is an older reference copy. The V1 source paths refer to the local reference copy. This is a source review. The reference application and current changes have yet to be exercised in a browser for this design.
+The reference is the local PHP application in `V1/SIS`, with SQL exports at `V1/sis_db.sql` and `V1/SIS/database/sms_db.sql`. Where exports and PHP disagree, the application workflows and posted stock behaviour guide the design. The XAMPP dashboard and older application copy are reference material. Legacy import and reconciliation are outside this release. `V1/` stays local and ignored.
 
 ## Screen and workflow inventory
 
-| V1 area | Behaviour visible in source | CAT SIMS design |
-| --- | --- | --- |
-| Sign-in and My Account | Username/password sign-in, signed-in navigation, account edit and logout. See login and account screens (`V1/SIS/admin/user`) and session entry points (`V1/SIS/classes/Login.php`). | Keep existing sign-in, registration, logout and forced first password change. Use the username in the account menu. Bring account changes into the existing account area. |
-| Dashboard | Counts purchase orders and back orders with a status other than Received. See `V1/SIS/admin/home.php`. | Display live outstanding counts for each and link to the corresponding list. An order with an open back order counts in both respective totals. |
-| Orders | Create a purchase order with one supplier, multiple item/size/quantity lines and remarks. Filter the item picker to the selected supplier. The list shows creation date, PO code, supplier, line count and status, with View, Edit, Delete and a Receive action for pending orders. Details can print. See purchase orders (`V1/SIS/admin/purchase_order`). | Add searchable orders, multi-line editing, detail/print and lifecycle-aware actions. Generate a stable code such as `PO-0001`. Orders alone leave stock unchanged. |
-| Receiving | Starts from a PO or BO. Shows its existing lines, accepts quantities from zero to the amount due and adds received stock. A shortage updates the status and generates remaining back-order lines. Separate receipt list and detail pages support view, edit, delete and print even though Receiving has no main sidebar link. See `V1/SIS/admin/receiving` and transaction handlers (`V1/SIS/classes/Master.php`). | Start from the order or back order. Offer receipt history through linked details, with printable receipts and validated corrections. |
-| Back Order | Lists supplier, code, line count and status. Details show the originating PO and outstanding lines. The visible list offers View and Receive for pending entries. See back orders (`V1/SIS/admin/back_order`). | Generate `BO-0001`-style references from shortages. Keep the PO and receipt links. Define repeat receiving against the open remainder as described below. |
-| Stocks | Shows item, supplier, description and availability. Availability is the sum of inbound less outbound stock, aggregated by item. See stock list (`V1/SIS/admin/stocks/index.php`). | Make the stock template functional. Show the item total and allow viewing size-level balances and movement history. |
-| Issue Uniform | Select an active recipient from Client List and active items. Capture item, size, quantity and remarks. A saved issue creates outbound stock. Issue list supports View, Edit and Delete, and details can print. See issue screens (`V1/SIS/admin/sales`). | Select a cadet by stable ID and save a multi-line `ISSUE-0001`-style record. Validate stock for each size and add the issue to the cadet history. Retain the recorded recipient label for historical display. |
-| Return List | Select a supplier and its active items, then record size, quantity and remarks. The handler writes outbound stock. Lists show date, returned-by label and line count. Records have detail/print and edit/delete actions. See return screens (`V1/SIS/admin/return`). | Treat this workflow as **return to supplier**, using `R-0001`-style codes. Record the acting username. A cadet handing kit back is a separate inbound workflow pending confirmation. |
-| Cadet Kit | The page headed “Issued” reads issue records, but the rendered cells and headings disagree. It has no reliable per-cadet aggregation. See Cadet Kit (`V1/SIS/admin/Issued_Cadet/index.php`). | Show per-cadet issue history and totals backed by issue lines. Label quantity totals and line counts separately. Treat on-hand kit totals as a later addition if cadet handbacks are in scope. |
-| Supplier List | Create, view, edit and delete suppliers. Name, address, contact person, contact number and active/inactive status. Duplicate names are checked when saving. See maintenance screens (`V1/SIS/admin/maintenance`). | Keep supplier maintenance admin-only. Inactive suppliers remain visible in history and are excluded from new orders and supplier returns. |
-| Client List | Create, view, edit and delete recipients with name, CIN and active/inactive status. The issue picker reads this list. A separate `clients/` folder reads user records and has no link in the active sidebar. See Client List (`V1/SIS/admin/maintenance/client.php`) and alternate client screens (`V1/SIS/admin/clients`). | Use Cadets as the working recipient register. Retain name, identifier and status. Confirm the mapping from CIN to the existing service number before any import. |
-| Item List | Create, view, edit and delete catalog items with name, description, supplier, Blue/Green type and active/inactive status. Name is checked for duplicates within the supplier. See item form (`V1/SIS/admin/maintenance/manage_item.php`). | Keep catalog maintenance admin-only. Store item type separately from size and preserve inactive items in historical records. |
-| User List | Administrators can create, edit and delete users. The V1 roles are Administrator and Staff. See user administration (`V1/SIS/admin/user`). | Keep the current account and staff-link flows. Add username/role edits and an explicit password reset flow in the administration chunk. Define account removal and session effects before enabling it. |
-| Settings | Edit system name, short name, About Us, logo and cover image, with previews for both uploads. The active sign-in page uses the cover. See settings screen (`V1/SIS/admin/system_info/index.php`) and settings handler (`V1/SIS/classes/SystemSettings.php`). | Store settings in D1 and uploaded images in a dedicated storage binding. Preserve the last saved image if an upload fails. Confirm where About Us should appear because the active entry point leads to sign-in. |
-
-List pages generally use DataTables for search, sorting and pagination. CAT SIMS should use its own interface with those behaviours where relevant, plus clear loading, empty and error states. Use line counts for V1-style transaction lists and quantities where the screen promises total units. Printable details should include the reference, supplier or cadet, dates, remarks and line quantities.
-
-## Access model
-
-V1 shows operations to signed-in users of its admin module and shows Maintenance to accounts of type 1. Its separate login module and menu checks do not establish a dependable permission contract. CAT SIMS should enforce the following proposed access rules in every Worker endpoint and mirror them in navigation.
-
-| Account | Access |
+| V1 area | Implemented CAT SIMS behaviour |
 | --- | --- |
-| Administrator | Operational workflows, dashboard counts, maintenance, settings and user management after any mandatory password change. |
-| Staff | Existing `user` role with a staff link created by an administrator. Can see operational counts, read relevant catalog and recipient choices, and use purchasing, receiving, stock, uniform issue, supplier returns and cadet kit. |
-| Other signed-in user | Existing account features. Public registration alone grants no access to operational or cadet data. |
-| Signed out or awaiting mandatory password change | Existing authentication and password-change flows. Business data requires a live eligible session and completed password change. |
+| Sign-in and My Account | Username/password sign-in and public registration, session restoration, logout and password change. New or reset administrator-created credentials require replacement at next sign-in. Staff account creation requires **Username, Password and Role**. V1 reference is `V1/SIS/classes/Login.php`. |
+| Dashboard | Shows outstanding purchase-order and back-order counts to operational users and links to both lists. A partial PO with an open BO is counted once in each list. About Us appears on the signed-in dashboard. V1 reference is `V1/SIS/admin/home.php`. |
+| Orders | Orders have one supplier, multiple item/size lines, whole quantities, remarks, printable detail and a stable `PO-` reference. Staff and administrators can edit pending orders until the first receipt. Administrators can cancel an unreceived order with a reason. V1 reference is `V1/SIS/admin/purchase_order`. |
+| Receiving | Receive from purchase-order or back-order details. Receipts show the supplier, actor, reference, quantities and remarks, with search and print. Administrators correct a posted receipt through a reversal. V1 reference is `V1/SIS/admin/receiving`. |
+| Back Orders | A partial delivery opens one BO reference for the PO. Later deliveries reuse it. The detail view shows ordered, received and remaining quantities, provides print and receipt history, and links to receiving. V1 reference is `V1/SIS/admin/back_order`. |
+| Stock Management | Shows availability by item and size and links movements to their transaction history. Administrators can explicitly map a pre-existing D1 stock row to an opening balance for a catalog size. That capability is available separately from this release's fresh-data verification. V1 reference is `V1/SIS/admin/stocks/index.php`. |
+| Issue Uniform | Select an active cadet and available sizes, post multiple lines and print the resulting issue. History preserves the recipient name at posting. V1 reference is `V1/SIS/admin/sales`. |
+| Supplier Returns | Select an active supplier and available sizes from its items. A posted return reduces stock and retains the signed-in actor, remarks and a printable reference. V1 reference is `V1/SIS/admin/return`. |
+| Cadet Kit | Shows issue history by cadet, including reversed references, with issue, line and unit counts for unreversed issues. Cadets with historical issues remain discoverable after leaving. V1 reference is `V1/SIS/admin/Issued_Cadet/index.php`. |
+| Supplier, Client and Item Lists | Suppliers have contact details and active status. Cadets provide the recipient register with names and an optional service number. Catalog items belong to a supplier and have Blue/Green type, with size variants managed separately. Administrators maintain these registers and retired entries remain linked in history. V1 reference is `V1/SIS/admin/maintenance`. |
+| User List | Administrators manage other accounts by username and role, set temporary passwords, and deactivate or reactivate sign-in access. Staff links and historical actor references survive these operations. V1 reference is `V1/SIS/admin/user`. |
+| Settings | Administrators edit system and short names, About Us, and logo and sign-in cover images. The browser previews selected images and the Worker validates uploaded bytes before replacing either slot. V1 reference is `V1/SIS/admin/system_info/index.php`. |
 
-Use the existing Staff Accounts create/link workflow to grant operational access. Keep recipient data separate from login identities. Check staff eligibility and role from D1 on each business request. Add account deletion or deactivation only after defining recovery, audit history, and protection against losing the last administrator.
+Live register and transaction lists use search and cursor pagination with stable ID ordering. Printable transaction details show the reference, relevant supplier or recipient, date, quantities and remarks where present. Lists distinguish line counts from unit totals.
 
-## Stock and order rules
+## Access and account lifecycle
 
-1. **Create the order.** Save one purchase-order header and one or more item/size/quantity lines in a single operation. Validate the supplier, supported item type and positive whole-unit quantities. Preserve separate sizes of the same item on distinct lines.
-2. **Receive stock.** Load eligible lines and calculate remaining units on the server. Permit zero for individual lines during a partial delivery, require at least one positive line and cap each quantity at the remaining units. For every positive quantity, record an inbound movement tied to the source line. Save receipt, movements, order status and back-order changes together.
-3. **Handle shortages.** A PO is Pending before its first receipt, Partially received while some units remain and Received once all units arrive. On partial receipt create a BO for the missing quantities. Proposed behaviour for repeated deliveries is to keep one open BO per PO, update its remainder after each delivery and close it when nothing remains. The same BO reference stays visible in history.
-4. **Issue or return stock.** Issue to a cadet or return to a supplier using separate transaction types. Both consume stock in V1. Validate availability for each item/size, including the combined demand of repeated lines. Reject insufficient stock without creating a partial record.
-5. **Correct a transaction.** Preserve its reference and history. For posted activity, use a reversal or replacement whose net effect is checked against current stock and order totals. Refuse a correction that would leave negative stock or receipts in excess of the amended order. Offer confirmed deletion for unposted records and reversals for posted records.
+| Account | Access after any required password change |
+| --- | --- |
+| Administrator | All operations and registers, account management, branding, order cancellation, stock reversals and opening-balance mapping. |
+| Linked staff | A regular user with a Staff Accounts link. Can read active register records and use orders, receiving, back orders, stock, issues, supplier returns and Cadet Kit. |
+| Unlinked signed-in user | Account controls and the basic dashboard with About Us. Public registration alone grants no operational access. |
+| Signed out or awaiting a mandatory password change | Sign-in and relevant account maintenance. Public branding is available before sign-in. |
+| Deactivated account | Sign-in is blocked until another administrator reactivates the account. Historical references stay attached to the original account. |
 
-For example, order 10 of a single size and receive 6. Stock rises by 6, the PO becomes Partially received and 4 appear on a BO. Receive 4 against that BO to close both records and bring stock to 10. Issue 2 to a cadet and return 1 to the supplier to leave 7 available. Reversing the issue restores 2 units and updates the cadet history.
+The Worker checks the live session and role, and checks staff membership for operational access. Navigation follows those permissions. Identity edits, administrator resets and deactivation revoke the target user's sessions. Reactivation retains any pending password change and requires a new login. Administrators manage other users only, and the write rechecks the acting administrator so concurrent changes cannot remove the last ready administrator. The bootstrap username `admin` is reserved. Staff account entry uses username, password and role. Cadet records remain separate from login identities.
+
+## Order and stock rules
+
+1. **Create a purchase order.** Save one header and its lines atomically against an active supplier and its active item sizes. Quantities are positive whole units. The supplier stays fixed after creation. Retained lines keep their IDs and recorded labels. An order on its own leaves stock unchanged.
+2. **Receive a delivery.** Enter any quantities up to the server-calculated remainder, including zero on individual lines. At least one line must be positive. The receipt, movements and derived status changes commit together. A PO becomes Partially received when a delivery leaves a shortage and Received when every line is filled.
+3. **Manage shortages.** The first partial delivery creates a BO. The remainder comes from ordered quantities minus net posted receipt movements. Once received, the BO closes and stays in history. A later receipt reversal may reopen that same BO.
+4. **Issue or return stock.** A uniform issue to a cadet and a return to a supplier both decrease stock. The ledger validates combined demand by variant and rejects operations that would make a size balance negative.
+5. **Correct a record.** Administrators cancel a pending PO with no receiving history or reverse a posted receipt, issue or supplier return with a reason. Reversals preserve the original and record opposing movements. An invalid reversal rolls back. Any receiving history prevents PO edits, including when all receipts are reversed.
+
+For example, order 10 of a size and receive 6. Stock rises to 6 and a BO shows 4 remaining. Receive those 4 against the BO to close both records and bring stock to 10. Issue 2 and return 1 to the supplier to leave 7 available. Reverse the issue to restore the balance to 9 and remove its units from the unreversed Cadet Kit total.
 
 ## Data and API design
 
-The existing [schema](schema.js) has a supplier-free stock row with a stored quantity and an orders table with one stock item per order. Add the structures needed for V1 without rewriting existing records in place. Final names and migration SQL belong to the implementation chunk.
-
-| Proposed structure | Relationships and responsibilities |
+| Storage | Relationships and responsibilities |
 | --- | --- |
-| Users, sessions and staff | Retain the existing authentication tables and staff links. Store account ID on new operational records so historic actions can be attributed. Preserve existing staff and order references. |
-| Cadets | Reuse the current cadet register with a stable ID. Decide if CIN needs its own field after checking real data. Historical issues keep their recorded recipient details when a cadet is renamed or leaves. |
-| Suppliers, catalog items and size variants | Each item belongs to one supplier. Each variant belongs to one item and represents a particular size. Maintain a link or migration mapping for existing stock rows. |
-| Purchase orders and order lines | Header holds supplier, code, status, actor and remarks. Lines hold variant and ordered quantity. Keep immutable IDs for receipt matching. |
-| Receipts and receipt lines | Receipt records the PO and optional BO. Each receipt line refers to its originating order line and creates an inbound movement. |
-| Back orders and back-order lines | Link to the PO and its outstanding order lines. Keep receipt links so the outstanding quantity can be reconciled from posted deliveries. |
-| Issues, supplier returns and their lines | Issue header links to a cadet. Supplier-return header links to a supplier. Each line creates an outbound movement. |
-| Stock movements | Record variant, signed unit change, timestamp, actor, source line and reversal reference where applicable. Compute availability from movements. Where existing stock quantities must carry forward, create a one-time opening balance so the same stock is counted once. |
-| System settings | Store text and allowed image references in D1. Deliver only verified logo and cover images through the designated asset path. |
+| `users`, `sessions`, `staff`, `account_deactivations` | Existing account and staff IDs remain stable. Deactivation records block sign-in and revoke sessions without removing attribution. See [account administration](account-admin.js). |
+| `cadets`, `suppliers`, `catalog_items`, `catalog_variants` | The registers supply operational choices. Catalog items belong to suppliers and variants belong to catalog items. Active statuses filter new choices. See [management schema](schema.js). |
+| `purchase_orders`, `purchase_order_lines`, `purchase_order_cancellations`, `back_orders` | The order holds supplier and status. Lines hold stable variant references and ordered quantities. The BO has one reference per originating PO. Cancellations preserve the actor, reason and original order. |
+| `inventory_transactions`, `stock_movements` | A header records a receipt, issue, supplier return, opening balance or reversal. Each ledger row links a variant to a signed movement and the original PO line where applicable. Views derive size availability and purchase-line remainders. See [inventory schema](inventory-schema.js). |
+| `branding_settings`, `branding_images` | System names, About Us and two bounded image slots use the existing D1 binding. The logo accepts PNG/JPEG up to 128 KiB and 1,024 pixels per side. The cover accepts PNG/JPEG up to 512 KiB and 2,560 pixels per side. See [branding implementation](branding.js). |
 
-Keep the Worker JSON API and its existing auth and write checks. Each list should accept a bounded page size, search and stable sort rules. Details and mutations use stable IDs, while human-readable references remain suitable for printing and search. State changes derive from committed data. Use database uniqueness for codes and atomic writes with retry protection for receipts, issues, returns and reversals. Verify that concurrent requests cannot consume the same remaining units or oversell a size. Report validation and state conflicts in the same forms that triggered them.
+The Worker uses same-origin JSON writes, live access checks and bounded list reads. Database batches and movement validation enforce order remainders and stock availability at commit time. Transaction request IDs protect retries, and purchase-order version checks reject stale edits. Branding metadata and the two allowed image slots have public read endpoints. About Us requires a ready signed-in session. See the [API reference](README.md#api).
 
-## V1 discrepancies and decisions to confirm
+## V1 differences and scope decisions
 
-| Finding from source | Implication for replication |
+| V1 finding | CAT SIMS decision |
 | --- | --- |
-| PHP issue screens use `client_name`, while both SQL exports define `sales_list.client`. The bundled dump also lacks `client_list`. | Treat the Client List picker as the intended UI. Before importing any data, inspect the actual export shape and reconcile recipient matches. |
-| The root dump includes a required stock `bg` column without a default. Movement inserts in the PHP handlers omit it. | Keep Blue/Green on the catalog item, with size and quantity recorded on each stock operation. Verify historical type placement during import review. |
-| Back-order updates refer to a column inconsistent with the header schema, and the separate manage screen saves through the PO handler. Original receiving/delete paths can reset status without reconciling all receipts. | Use posted receipt totals as the source of truth. The stable open BO and reversal design above is proposed for review. |
-| The supplier-return list reads `returned_by`, but the return form does not capture it. Updating a return attempts an invalid stock statement before adding new outbound lines. | Make the recorded actor explicit and apply corrections atomically. Confirm whether the business also needs a separate “returned by” person. |
-| Cadet Kit counts issue stock-row IDs and its table has inconsistent headings. The old SQL includes commercial fields absent from the uniform issue UI. | Treat Cadet Kit as operational issue history. Confirm whether it should also show a current holdings view and capture cadet handbacks, losses or swaps. |
-| PHP lists allow several permanent deletes, and the root dump cascades some supplier/item deletions into operational data. | Preserve the ability to correct mistakes through archive, cancellation or reversal. Confirm the allowed correction permissions and any retention requirements before enabling those actions. |
-| Existing CAT SIMS templates show disabled import/export actions, while the reviewed V1 management flows use search, filters and print. | Plan V1 data import as a separately reviewed migration. Confirm any day-to-day CSV requirements before adding import/export features. |
+| The issue code and SQL disagree on the client field, and the bundled dump lacks `client_list`. | Use stable cadet IDs and retain the recipient label at posting. Legacy recipients and CIN mapping are outside this release. |
+| The root dump requires stock `bg` but movement inserts omit it. | Keep Blue/Green on catalog items and record movements by size variant. |
+| V1 back-order update and deletion paths can lose or misstate shortages. | Derive shortages from net receipts and retain one BO reference per order. |
+| The return list displays `returned_by` but its form does not capture it. | Record the signed-in actor. A separate return-contact field is outside current scope. |
+| V1 Cadet Kit counts stock row IDs and has inconsistent headings. | Report issue history with distinct line and unit totals. Cadet handbacks, losses, swaps and current holdings are outside current scope. |
+| V1 pages expose permanent deletes and the SQL cascades some supplier and item deletions. | Retire register entries, deactivate accounts, cancel eligible orders, and reverse posted transactions while retaining history. |
+| Earlier CAT SIMS templates displayed CSV actions, and the requested release skips legacy import. | Use search, lists and printable details. CSV import and export are outside this release. |
 
-## Implementation chunks and acceptance
+## Phases and verification
 
-| Chunk | Deliverable and acceptance checks |
+| Phase | Status |
 | --- | --- |
-| 1. Design | Review the reference workflow inventory, proposed access rules and interpretation of the source discrepancies. |
-| 2. Cadets, suppliers and catalog | Working registers and active pickers. Verify duplicate handling, historical links, field mapping and operational access gates. |
-| 3. Orders, receiving and back orders | Multi-line orders, partial and full receipts, printable details and dashboard counts. Verify mixed sizes, zero lines in a partial delivery, repeat receipts, retry and concurrent submissions, rollback and corrections. |
-| 4. Stock, issues, returns and cadet kit | Ledger-backed availability, printable issue/return records and history by cadet. Verify the worked stock example, oversized issue rejection, size-level isolation and reversals. |
-| 5. Accounts and settings | Finish account administration and branding with the approved roles and account-removal rules. Verify forced password change, live permission checks, safe uploads, failed upload recovery and existing login behaviour. |
-| 6. Data reconciliation and release | If data import is requested, verify mappings and totals using an isolated copy. Compare recipient links, per-variant balances, open PO/BO quantities and source references before touching production. Run Cloudflare build and deployed browser smoke checks using test accounts for each role. |
+| 1. Operational access | Implemented. Isolated tests cover authentication, role gates, staff links and mandatory password changes. |
+| 2. Cadet, supplier and catalog registers | Implemented. Isolated tests cover search, pagination, duplicate checks and active choices. |
+| 3. Purchase orders | Implemented. Isolated tests cover multi-size orders, retries, stale edits and rollback. |
+| 4. Receiving, back orders and stock | Implemented. Isolated tests cover partial and complete receipts, repeat requests, competing writes and stock balances. |
+| 5. Uniform issue, supplier returns and corrections | Implemented. Isolated tests cover insufficient stock, competing issues, reversal history, cancellations and Cadet Kit totals. |
+| 6. Account administration and branding | Implemented. Isolated tests cover resets, session revocation, last-administrator protection, upload permissions and preservation of a saved image after failure. |
+| 7. Release verification | Owner-led. Confirm the Cloudflare build and exercise the deployed browser workflows in [TODO.md](TODO.md#7-verify-the-release). |
 
-Keep `V1/` local as reference material. Deployment continues to publish `build/` and its explicit asset allowlist. Use sanitised fixtures for tests and documentation, and leave V1 account data and local configuration out of deployment and Git staging. Track source review, isolated tests, Cloudflare build and browser verification as distinct checks.
+Deployment retains the existing D1 binding and publishes `build/` with the explicit static asset allowlist. Branding images are served through the Worker. Source review and isolated tests establish local verification. Deployed browser behaviour and Cloudflare build results are recorded separately during Phase 7.
