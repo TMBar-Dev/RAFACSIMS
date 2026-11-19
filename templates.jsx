@@ -8,12 +8,12 @@ import { useResource } from './management-ui.jsx';
 export const PAGES = {
   dashboard: { title: 'Dashboard', description: 'Your squadron workspace at a glance.' },
   cadets: {
-    title: 'Cadets',
+    title: 'Cadet Management',
     permissions: ['issue-kit'],
     description: 'A place for cadet records, flights and service information.',
   },
   orders: {
-    title: 'Orders', permissions: ['stores-demands'],
+    title: 'Demands', permissions: ['stores-demands'],
     description: 'Create and view purchase orders by supplier.'
   },
   suppliers: {
@@ -37,15 +37,15 @@ export const PAGES = {
     description: 'View live quantities, size balances and stock movements.'
   },
   issues: {
-    title: 'Issue Uniform', permissions: ['issue-kit'],
+    title: 'Uniform Issue', permissions: ['issue-kit'],
     description: 'Record uniform issued to cadets.'
   },
   'supplier-returns': {
-    title: 'Supplier Returns', permissions: ['return-kit'],
+    title: 'Uniform Return', permissions: ['return-kit'],
     description: 'Record stock sent back to suppliers.'
   },
   'cadet-kit': {
-    title: 'Cadet Kit', permissions: ['issue-kit'],
+    title: 'Cadet Issued', permissions: ['issue-kit'],
     description: 'Review issue history and totals by cadet.'
   },
   staff: {
@@ -86,8 +86,8 @@ export function visiblePages(user, permissions) {
 }
 
 const navigationGroups = [
-  ['Purchasing', ['orders', 'receipts', 'back-orders']],
-  ['Stock and cadets', ['stock', 'issues', 'supplier-returns', 'cadets', 'cadet-kit']],
+  ['Stores Demands', ['orders', 'receipts', 'back-orders']],
+  ['Kit Issue', ['issues', 'supplier-returns', 'cadet-kit', 'stock', 'cadets']],
   ['Administration', ['suppliers', 'catalog', 'staff', 'settings']]
 ];
 

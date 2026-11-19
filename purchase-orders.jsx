@@ -181,7 +181,7 @@ export default function PurchaseOrders({ request, initialId, canCorrect, posting
 
   return (
     <>
-      <header className="page-heading screen-only"><Typography component="h1" variant="h4">Orders</Typography></header>
+      <header className="page-heading screen-only"><Typography component="h1" variant="h4">Demands</Typography></header>
       {notice && <p className="message-banner screen-only" role="status">{notice}</p>}
       <PendingPosting posting={posting} onSave={saved} />
       {editing && (!selectedId || record) && <OrderEditor request={request} record={record}

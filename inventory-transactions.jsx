@@ -8,8 +8,8 @@ import {
 
 const workflows = {
   receipts: { title: 'Receiving', name: 'Receipt', party: 'Supplier' },
-  issues: { title: 'Issue Uniform', name: 'Uniform issue', party: 'Cadet' },
-  'supplier-returns': { title: 'Supplier Returns', name: 'Supplier return', party: 'Supplier' }
+  issues: { title: 'Uniform Issue', name: 'Uniform issue', party: 'Cadet' },
+  'supplier-returns': { title: 'Uniform Return', name: 'Supplier return', party: 'Supplier' }
 };
 
 const lineColumns = [['Item', 'item_name'], ['Size', 'size'], ['Quantity', 'quantity']];

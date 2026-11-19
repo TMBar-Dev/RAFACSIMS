@@ -139,7 +139,7 @@ export function CadetKit({ request, query }) {
   const record = result?.data?.record;
   return (
     <>
-      <InventoryHeading title="Cadet Kit" />
+      <InventoryHeading title="Cadet Issued" />
       {id && (record ? <>
         <Card className="workspace-card" variant="outlined">
           <div className="section-heading">

@@ -274,7 +274,7 @@ function App() {
       case 'cadet-kit': return <CadetKit key={hash} request={api} query={query} />;
       default: return transactionPages.includes(page)
         ? <TransactionsPage key={hash} request={api} page={page} query={query} canCorrect={canCorrect} postingOwner={postingOwner} />
-        : <RegisterPage key={page} request={api} resource={page} canEdit={canCorrect} />;
+        : <RegisterPage key={page} request={api} resource={page} canEdit={canCorrect} title={currentPage.title} />;
     }
   }
 

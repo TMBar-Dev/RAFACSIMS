@@ -217,11 +217,11 @@ function RegisterPanel({ request, resource, canEdit, itemId }) {
   );
 }
 
-export default function RegisterPage({ request, resource, canEdit }) {
+export default function RegisterPage({ request, resource, canEdit, title }) {
   return (
     <>
       <header className="page-heading"><Typography component="h1" variant="h4">
-        {registers[resource].title}
+        {title}
       </Typography></header>
       <RegisterPanel request={request} resource={resource} canEdit={canEdit} />
     </>
