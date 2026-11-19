@@ -1,10 +1,10 @@
 # CAT SIMS design based on SIS V1
 
-Reviewed 19 November 2026 against implementation commit `0f9a805`.
+Reviewed 19 November 2026 against source commit `8737715`.
 
 ## Scope and release status
 
-Phases 1–6 implement the core V1 workflows in the existing React application, Cloudflare Worker and D1 database. The isolated suite passed 23 tests for this commit. Cloudflare build and deployed browser verification remain open in the [release checklist](TODO.md).
+Phases 1–6 implement the core V1 workflows in the existing React application, Cloudflare Worker and D1 database. All 26 SQLite-backed schema and API tests passed on Node 24 with the runner in a single process. Cloudflare build, scheduled deployment and deployed browser verification remain open in the [release checklist](TODO.md).
 
 The reference is the local PHP application in `V1/SIS`, with SQL exports at `V1/sis_db.sql` and `V1/SIS/database/sms_db.sql`. Where exports and PHP disagree, the application workflows and posted stock behaviour guide the design. The XAMPP dashboard and older application copy are reference material. Legacy import and reconciliation are outside this release. `V1/` stays local and ignored.
 
@@ -13,7 +13,7 @@ The reference is the local PHP application in `V1/SIS`, with SQL exports at `V1/
 | V1 area | Implemented CAT SIMS behaviour |
 | --- | --- |
 | Sign-in and My Account | Username/password sign-in and public registration, session restoration, logout and password change. New or reset administrator-created credentials require replacement at next sign-in. Staff account creation requires **Username, Password and Role**. V1 reference is `V1/SIS/classes/Login.php`. |
-| Dashboard | Shows outstanding purchase-order and back-order counts to operational users and links to both lists. A partial PO with an open BO is counted once in each list. About Us appears on the signed-in dashboard. V1 reference is `V1/SIS/admin/home.php`. |
+| Dashboard | Shows outstanding purchase-order and back-order counts to operational users and links to both lists. A partial PO with an open BO is counted once in each list. Navigation groups related work and reflects account permissions. About Us appears on the signed-in dashboard. V1 reference is `V1/SIS/admin/home.php`. |
 | Orders | Orders have one supplier, multiple item/size lines, whole quantities, remarks, printable detail and a stable `PO-` reference. Staff and administrators can edit pending orders until the first receipt. Administrators can cancel an unreceived order with a reason. V1 reference is `V1/SIS/admin/purchase_order`. |
 | Receiving | Receive from purchase-order or back-order details. Receipts show the supplier, actor, reference, quantities and remarks, with search and print. Administrators correct a posted receipt through a reversal. V1 reference is `V1/SIS/admin/receiving`. |
 | Back Orders | A partial delivery opens one BO reference for the PO. Later deliveries reuse it. The detail view shows ordered, received and remaining quantities, provides print and receipt history, and links to receiving. V1 reference is `V1/SIS/admin/back_order`. |
@@ -86,3 +86,9 @@ The Worker uses same-origin JSON writes with byte-bounded bodies, live access ch
 | 7. Release verification | Owner-led. Confirm the Cloudflare build and exercise the deployed browser workflows in [TODO.md](TODO.md#7-verify-the-release). |
 
 Deployment retains the existing D1 binding and publishes `build/` with the explicit static asset allowlist. Branding images are served through the Worker. Source review and isolated tests establish local verification. Deployed browser behaviour and Cloudflare build results are recorded separately during Phase 7.
+
+## Deployment and development implications
+
+The existing Worker handles the Monday 03:00 UTC scheduled event. Cloudflare Trigger Events manages the schedule. The handler calls Workers Builds using a runtime secret and records the acknowledged build ID. Deployment and browser verification remain separate checks. See the [deployment configuration](README.md#weekly-and-post-push-deployment).
+
+Verify the full order, receipt, issue and reversal sequence on the deployed Worker and D1. Use the first stores pilot to identify workflow improvements, including recovery after interrupted saves. Exercise D1 recovery separately and check that the procedure preserves account access, order remainders and the stock ledger. Keep dependency upgrades separate so navigation, dialogs and printing can be verified against the same baseline. See the [development backlog](TODO.md#development-after-release-verification).
