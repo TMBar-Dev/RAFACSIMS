@@ -4,6 +4,7 @@
   // Backend entry point, bundled separately from the browser application.
   "main": "./worker.js",
   "compatibility_date": "2026-11-17",
+  "triggers": { "crons": ["0 3 * * MON"] },
   "assets": {
     // Only generated public files are hosted; never change this to ".".
     "directory": "./build",

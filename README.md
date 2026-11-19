@@ -177,6 +177,12 @@ Before marking this layout verified in production:
 
 Remove any previous `--assets` command-line argument: wrangler.jsonc configures both the Worker API and assets. The build identity must have permission to deploy Workers and bind the specified D1 database. The database name in the config assumes `rafacsims`; adjust it if you chose another name. The database ID is already configured.
 
+### Weekly deployment
+
+The existing `rafacsims` Cloudflare Worker requests a rebuild of `main` every Monday at 03:00 UTC, including weeks without new commits. The normal Workers Builds deployment applies the cron in `wrangler.jsonc`. Manual pushes use their separate hook.
+
+In Cloudflare, set `CLOUDFLARE_DEPLOY_HOOK_URL` as a runtime Worker secret on `rafacsims` using the URL saved in the ignored `.env.cloudflare-nightly-deploy-hook` file. After deployment, confirm the cron trigger and check Workers Logs for the build ID and status. The scheduled rebuild uses the current branch, so code defects still require a fix or rollback.
+
 The first API request after deployment creates missing authentication and management tables. Keep the deployed D1 binding and existing administrator accounts. A fresh D1 database needs a deployment-controlled administrator secret as described below.
 
 ## First sign-in

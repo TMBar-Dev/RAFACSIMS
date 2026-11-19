@@ -424,6 +424,22 @@ async function api(request, env) {
 }
 
 export default {
+  async scheduled(_controller, env) {
+    const hook = env.CLOUDFLARE_DEPLOY_HOOK_URL?.trim() ?? '';
+    if (!/^https:\/\/api\.cloudflare\.com\/client\/v4\/workers\/builds\/deploy_hooks\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(hook))
+      throw new Error('Set the scheduled Cloudflare deploy hook secret.');
+
+    let response;
+    try {
+      response = await fetch(hook, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(30000) });
+    } catch {
+      throw new Error('The scheduled Cloudflare hook could not be reached.');
+    }
+    if (!response.ok) throw new Error(`The scheduled Cloudflare hook returned HTTP ${response.status}.`);
+    const { success, result } = await response.json();
+    if (!success || !result?.build_uuid) throw new Error('Cloudflare did not acknowledge the scheduled build.');
+    console.log('Scheduled Cloudflare build', { id: result.build_uuid, status: result.status, reused: result.already_exists });
+  },
   async fetch(request, env) {
     if (!new URL(request.url).pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     try { return await api(request, env); }
