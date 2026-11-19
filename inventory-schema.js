@@ -3,7 +3,7 @@
 export const INVENTORY_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS purchase_order_cancellations (
     order_id INTEGER PRIMARY KEY REFERENCES purchase_orders(id),
-    actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    actor_id INTEGER REFERENCES staff(id) ON DELETE SET NULL,
     actor_name TEXT NOT NULL,
     reason TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -26,7 +26,7 @@ export const INVENTORY_SCHEMA = [
     cadet_id INTEGER REFERENCES cadets(id),
     supplier_id INTEGER REFERENCES suppliers(id),
     party_name TEXT NOT NULL,
-    actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    actor_id INTEGER REFERENCES staff(id) ON DELETE SET NULL,
     actor_name TEXT NOT NULL,
     notes TEXT NOT NULL DEFAULT '',
     original_id INTEGER UNIQUE REFERENCES inventory_transactions(id),

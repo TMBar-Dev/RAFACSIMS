@@ -91,7 +91,7 @@ const movementKinds = {
   opening: ['Opening balance'], reversal: ['Reversal']
 };
 
-export function StockPage({ request, query, canCorrect }) {
+export function StockPage({ request, query, canCorrect, canViewTransaction }) {
   const id = queryId(query, 'id');
   const result = useResource(request, id ? `inventory-stock/${id}` : null);
   const record = result?.data?.record;
@@ -114,9 +114,12 @@ export function StockPage({ request, query, canCorrect }) {
           ['Size', 'size'], ['Available units', 'quantity'], ['Status', row => row.status === 'active' ? 'Active' : 'Inactive']
         ]} />
         <InventoryList request={request} endpoint={`inventory-stock/${id}/movements`} title="Stock movements" columns={[
-          ['Reference', row => movementKinds[row.kind][1]
-            ? <InventoryLink page={movementKinds[row.kind][1]} query={{ id: row.transaction_id }}>{row.code}</InventoryLink>
-            : row.code],
+          ['Reference', row => {
+            const page = movementKinds[row.kind][1];
+            return page && canViewTransaction(page)
+              ? <InventoryLink page={page} query={{ id: row.transaction_id }}>{row.code}</InventoryLink>
+              : row.code;
+          }],
           ['Type', row => movementKinds[row.kind][0]], ['Original reference', row => row.original_code ?? '—'],
           ['Size', 'size'], ['Unit change', row => row.quantity_delta > 0 ? `+${row.quantity_delta}` : row.quantity_delta],
           ['Actor', 'actor_name'], ['Posted', row => formatDate(row.created_at)], ['Remarks', row => row.notes || '—']

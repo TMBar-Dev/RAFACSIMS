@@ -1,28 +1,11 @@
 import { INVENTORY_SCHEMA } from './inventory-schema.js';
 
 // Additive D1/SQLite schema for the management pages. Statements run in
-// order after the existing users table is created. Repeated initialization does
+// order after the staff account table is ready. Repeated initialization does
 // not drop tables, overwrite records or reset account passwords.
 // CREATE IF NOT EXISTS is not a migration: later column changes need a separate
 // reviewed migration rather than editing these declarations alone.
 export const MANAGEMENT_SCHEMA = [
-  // Staff profiles and sign-in accounts are separate. Profiles may exist without
-  // a login; deleting a login unlinks its profile rather than deleting it.
-  `CREATE TABLE IF NOT EXISTS staff (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE SET NULL,
-    service_number TEXT COLLATE NOCASE UNIQUE
-      CHECK(service_number IS NULL OR length(trim(service_number)) > 0),
-    first_name TEXT NOT NULL CHECK(length(trim(first_name)) > 0),
-    last_name TEXT NOT NULL CHECK(length(trim(last_name)) > 0),
-    rank TEXT NOT NULL DEFAULT '',
-    appointment TEXT NOT NULL DEFAULT '',
-    email TEXT NOT NULL DEFAULT '',
-    phone TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'inactive')),
-    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-  )`,
   // Names are required; a service number and joining date can be filled later.
   // Dates use YYYY-MM-DD, not a locale-dependent date string or Unix timestamp.
   `CREATE TABLE IF NOT EXISTS cadets (
@@ -56,6 +39,8 @@ export const MANAGEMENT_SCHEMA = [
   // Initial model: one stock item/quantity per order, with optional recipient,
   // handling staff member and creator links. Keep historical orders if linked
   // people/accounts are deleted; referenced stock cannot be deleted.
+  // In migrated databases the existing staff_id foreign key follows its
+  // original profile table, now named legacy_staff_profiles.
   // There are no inventory triggers: changing status does NOT adjust stock.
   `CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,7 +51,7 @@ export const MANAGEMENT_SCHEMA = [
     status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'submitted', 'fulfilled', 'cancelled')),
     cadet_id INTEGER REFERENCES cadets(id) ON DELETE SET NULL,
     staff_id INTEGER REFERENCES staff(id) ON DELETE SET NULL,
-    created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_by_user_id INTEGER REFERENCES staff(id) ON DELETE SET NULL,
     notes TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -110,7 +95,7 @@ export const MANAGEMENT_SCHEMA = [
     supplier_name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'partial', 'received')),
     notes TEXT NOT NULL DEFAULT '',
-    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_by INTEGER REFERENCES staff(id) ON DELETE SET NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
     version INTEGER NOT NULL DEFAULT 1,

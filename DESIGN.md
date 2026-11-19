@@ -4,7 +4,7 @@ Source baseline reviewed on 19 November 2026 at commit `8737715`.
 
 ## Scope and release status
 
-Phases 1–6 implement the core V1 workflows in the existing React application, Cloudflare Worker and D1 database. All 26 SQLite-backed schema and API tests passed on Node 24 with the runner in a single process. Cloudflare build, scheduled deployment and deployed browser verification remain open in the [release checklist](TODO.md).
+Phases 1–6 implement the core V1 workflows in the existing React application, Cloudflare Worker and D1 database. The initial baseline passed 26 SQLite-backed schema and API tests. The staff account migration and workflow permission changes bring the passing local suite to 30 tests. Cloudflare build, scheduled deployment and deployed browser verification remain open in the [release checklist](TODO.md).
 
 The design uses the PHP application in `V1/SIS` and the SQL exports at `V1/sis_db.sql` and `V1/SIS/database/sms_db.sql`. Where the exports and PHP disagree, the application workflows and posted stock behaviour guide the design. The XAMPP dashboard and older application copy are reference material.
 
@@ -21,8 +21,8 @@ PO means purchase order and BO means back order. Reference paths in these tables
 | Screen | CAT SIMS behaviour | V1 reference |
 | --- | --- | --- |
 | Sign-in and My Account | Supports username and password sign-in, public registration, session restoration, logout and password changes. Administrator-created or reset accounts must replace the temporary password at next sign-in. | `classes/Login.php` |
-| Dashboard | Links operational users to outstanding POs and BOs. A partial PO with an open BO counts in both totals. Navigation follows account permissions. The signed-in dashboard displays About Us. | `admin/home.php` |
-| User List | Administrators edit other accounts by username and role, set temporary passwords and deactivate or reactivate sign-in access. Staff links and historical actor references survive these changes. | `admin/user` |
+| Dashboard | Links users with Stores Demands to outstanding POs and BOs. A partial PO with an open BO counts in both totals. Navigation follows account permissions. The signed-in dashboard displays About Us. | `admin/home.php` |
+| Staff Accounts | Administrators manage all logins by username, role and stores permissions, set temporary passwords, and deactivate or reactivate access. Historical actor references retain their account IDs. | `admin/user` |
 
 ### Orders and stock
 
@@ -50,16 +50,16 @@ Register and transaction lists use search and cursor pagination with stable ID o
 | Account | Access |
 | --- | --- |
 | Administrator | All stores workflows and registers, plus account management, branding, cancellations, reversals and review of existing opening balances. |
-| Linked staff | A regular user with a Staff Accounts link. Can read active register records and use orders, receiving, back orders, stock, issues, supplier returns and Cadet Kit. |
-| Unlinked signed-in user | Account controls and the basic dashboard with About Us. Public registration alone grants no operational access. |
+| User with workflow permissions | Issue Kit enables cadet lookup, issues and Cadet Kit. Return Kit enables supplier returns. Stores Demands enables purchase orders, receipts and back orders. Any workflow permission grants read access to Stock Management. |
+| User without workflow permissions | Account controls and the basic dashboard with About Us. Public registration alone grants no operational access. |
 | Awaiting a mandatory password change | Password change and sign-out. Stores access starts once the password is replaced. |
 | Signed out | Sign-in, public registration and public branding. |
 | Deactivated account | Sign-in is blocked until another administrator reactivates the account. Historical references stay attached to the original account. |
 
-- **Live access checks.** The Worker checks the session, current role and, when required, the staff link on protected requests. Navigation reflects the same permissions.
+- **Live access checks.** The Worker checks the session, current role and required workflow permission on protected requests. Navigation reflects the same permissions.
 - **Account changes.** Username or role edits, administrator resets and deactivation revoke the target user's sessions. Reactivation preserves a pending password change and requires a new sign-in.
 - **Administrator continuity.** Administrators manage other users. Writes recheck the acting administrator and protect the last administrator who can sign in and use the app, including during concurrent changes. The bootstrap username `admin` is reserved.
-- **Staff creation.** Creating a new staff account uses **Username**, **Password** and **Role**. A staff record can also link an existing login. Cadet records have their own identities.
+- **Staff creation.** Administrators create accounts with a username, temporary password, role and stores permissions. A single `staff` row stores each login. Cadet records have their own identities.
 
 ## Order and stock rules
 
@@ -88,11 +88,13 @@ The reversed issue remains visible in Cadet Kit history. Its two units are remov
 
 | Storage | Relationships and responsibilities |
 | --- | --- |
-| `users`, `sessions`, `staff`, `account_deactivations` | Existing account and staff IDs remain stable. Deactivation records block sign-in and revoke sessions without removing attribution. See [account administration](account-admin.js). |
+| `staff`, `sessions`, `account_deactivations` | `staff` stores credentials, role and the three stores permission flags. Account IDs remain stable during migration. Deactivation records block sign-in and revoke sessions without removing attribution. See [account administration](account-admin.js). |
 | `cadets`, `suppliers`, `catalog_items`, `catalog_variants` | The registers supply operational choices. Catalog items belong to suppliers and variants belong to catalog items. Active statuses filter new choices. See [management schema](schema.js). |
 | `purchase_orders`, `purchase_order_lines`, `purchase_order_cancellations`, `back_orders` | The order holds supplier and status. Lines hold stable variant references and ordered quantities. The BO has one reference per originating PO. Cancellations preserve the actor, reason and original order. |
 | `inventory_transactions`, `stock_movements` | A header records a receipt, issue, supplier return, opening balance or reversal. Each ledger row links a variant to a signed movement and the original PO line where applicable. Views derive size availability and purchase-line remainders. See [inventory schema](inventory-schema.js). |
 | `branding_settings`, `branding_images` | System names, About Us and two bounded image slots use the existing D1 binding. Saved image revisions support recovery after a faulty upload. See the [branding implementation](branding.js) and [upload limits](README.md#branding). |
+
+Legacy deployments migrate with transactional table renames before handling API requests. The old staff profile table is archived so historical links remain valid. The account table keeps its IDs and becomes `staff`. Existing staff links become all three workflow permissions. See the [migration and rollback notes](README.md#updating-an-existing-database).
 
 ### Why the safeguards exist
 
@@ -119,7 +121,7 @@ The Worker accepts same-origin JSON writes with bounded bodies and serves bounde
 
 | Phase | Status |
 | --- | --- |
-| 1. Operational access | Implemented. Isolated tests cover authentication, role gates, staff links and mandatory password changes. |
+| 1. Operational access | Implemented. Isolated tests cover authentication, role gates, workflow permissions and mandatory password changes. |
 | 2. Cadet, supplier and catalog registers | Implemented. Isolated tests cover search, pagination, duplicate checks and active choices. |
 | 3. Purchase orders | Implemented. Isolated tests cover multi-size orders, retries, stale edits and rollback. |
 | 4. Receiving, back orders and stock | Implemented. Isolated tests cover partial and complete receipts, repeat requests, competing writes and stock balances. |

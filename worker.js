@@ -1,6 +1,10 @@
 // Cloudflare Worker entry point: API requests use D1; other requests serve the
 // generated frontend through ASSETS. Never serve the repository root itself.
 import { MANAGEMENT_SCHEMA } from './schema.js';
+import { initializeStaffSchema } from './staff-schema.js';
+import {
+  ALL_PERMISSIONS, ISSUE_KIT, RETURN_KIT, STORES_DEMANDS, hasPermission, permissionMask, permissionNames
+} from './account-permissions.js';
 import { fail, managementRoute, readManagement, writeManagement } from './management.js';
 import { inventoryRoute, readInventory, writeInventory } from './inventory.js';
 import { ACCOUNT_ACTIVE, ACCOUNT_ADMIN_SCHEMA, LIVE_ADMIN, administerAccount } from './account-admin.js';
@@ -21,47 +25,40 @@ const RETIRED_BOOTSTRAP_HASH = 'pbkdf2$100000$475004062412af7965037c5326040053$c
 // Shared by requests in this Worker isolate, not a replacement for D1 storage.
 let ready;
 
-const BOOTSTRAP_STAFF_LINK = `INSERT OR IGNORE INTO staff (user_id, first_name, last_name)
-  SELECT id, '-', '-' FROM users WHERE username = 'admin' AND role = 'admin' AND password_hash != ?`;
+const BOOTSTRAP_PERMISSIONS = `UPDATE staff SET permissions = ${ALL_PERMISSIONS}
+  WHERE username = 'admin' AND role = 'admin' AND password_hash != ?
+  AND permissions != ${ALL_PERMISSIONS}`;
 
 // Provision once on a new database, or replace the exact untouched legacy
 // credential. The predicates also protect against concurrent cold starts.
 async function provisionAdministrator(db, password) {
   if (typeof password === 'string' && password.trim().length >= 16 && password.length <= 128) {
-    const existing = await db.prepare("SELECT password_hash, role, must_change_password FROM users WHERE username = 'admin'").first();
+    const existing = await db.prepare("SELECT password_hash, role, must_change_password FROM staff WHERE username = 'admin'").first();
     if (!existing || (existing.password_hash === RETIRED_BOOTSTRAP_HASH && existing.role === 'admin' && existing.must_change_password)) {
       const hash = await hashPassword(password);
       await db.batch([
-        db.prepare(`INSERT OR IGNORE INTO users (username, password_hash, role, must_change_password)
-          SELECT 'admin', ?, 'admin', 1 WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')`).bind(hash),
-        db.prepare(`UPDATE users SET password_hash = ?
+        db.prepare(`INSERT OR IGNORE INTO staff (username, password_hash, role, must_change_password, permissions)
+          SELECT 'admin', ?, 'admin', 1, ${ALL_PERMISSIONS} WHERE NOT EXISTS (SELECT 1 FROM staff WHERE role = 'admin')`).bind(hash),
+        db.prepare(`UPDATE staff SET password_hash = ?
           WHERE username = 'admin' AND role = 'admin' AND must_change_password = 1 AND password_hash = ?`)
           .bind(hash, RETIRED_BOOTSTRAP_HASH),
         db.prepare(`DELETE FROM sessions WHERE user_id IN (
-          SELECT id FROM users WHERE username = 'admin' AND password_hash = ?
+          SELECT id FROM staff WHERE username = 'admin' AND password_hash = ?
         )`).bind(hash),
-        db.prepare(BOOTSTRAP_STAFF_LINK).bind(RETIRED_BOOTSTRAP_HASH)
+        db.prepare(BOOTSTRAP_PERMISSIONS).bind(RETIRED_BOOTSTRAP_HASH)
       ]);
       return;
     }
   }
-  await db.prepare(BOOTSTRAP_STAFF_LINK).bind(RETIRED_BOOTSTRAP_HASH).run();
+  await db.prepare(BOOTSTRAP_PERMISSIONS).bind(RETIRED_BOOTSTRAP_HASH).run();
 }
 
 // Concurrent requests share the initialization promise; a failure permits retry.
 async function initialize(db, bootstrapPassword) {
-  if (!ready) ready = db.batch([
-    db.prepare(`CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT NOT NULL COLLATE NOCASE UNIQUE,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('user', 'admin')),
-      must_change_password INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch())
-    )`),
+  if (!ready) ready = initializeStaffSchema(db).then(() => db.batch([
     db.prepare(`CREATE TABLE IF NOT EXISTS sessions (
       token_hash TEXT PRIMARY KEY,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
       expires_at INTEGER NOT NULL
     )`),
     db.prepare('CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id)'),
@@ -71,10 +68,8 @@ async function initialize(db, bootstrapPassword) {
     )`),
     ...ACCOUNT_ADMIN_SCHEMA.map(statement => db.prepare(statement)),
     ...BRANDING_SCHEMA.map(statement => db.prepare(statement)),
-    // Add the management tables without changing existing authentication
-    // records. Staff profiles can link to accounts through user_id.
     ...MANAGEMENT_SCHEMA.map(statement => db.prepare(statement))
-  ]).then(() => provisionAdministrator(db, bootstrapPassword))
+  ])).then(() => provisionAdministrator(db, bootstrapPassword))
     .catch(error => { ready = undefined; throw error; });
   await ready;
 }
@@ -114,18 +109,9 @@ function publicUser(user) {
   // Explicit allowlist: never send password hashes or session records to clients.
   return { username: user.username, role: user.role, mustChangePassword: Boolean(user.must_change_password) };
 }
-function publicStaff(row) {
-  return {
-    id: row.id,
-    account: row.account_id === null ? null : { id: row.account_id, ...publicUser(row), active: Boolean(row.active) }
-  };
-}
-// Existing D1 tables require nonempty name columns. Fixed markers keep staff
-// IDs and order references intact while allowing links without personal data.
-const INSERT_STAFF_LINK = `INSERT INTO staff (user_id, first_name, last_name)
-  SELECT id, '-', '-' FROM users WHERE username = ? AND ${LIVE_ADMIN}`;
-const INSERT_ADMIN_CREATED_USER = `INSERT INTO users (username, password_hash, role, must_change_password)
-  SELECT ?, ?, ?, 1 WHERE ${LIVE_ADMIN}`;
+const INSERT_ADMIN_CREATED_USER = `INSERT INTO staff (username, password_hash, role, must_change_password, permissions)
+  SELECT ?, ?, ?, 1, ? WHERE ${LIVE_ADMIN}`;
+
 function requireReadySession(user) {
   if (!user) fail('Please log in.', 401);
   if (user.must_change_password) fail('Change your password before continuing.', 403);
@@ -134,14 +120,16 @@ function requireAdministrator(user) {
   requireReadySession(user);
   if (user.role !== 'admin') fail('Administrator access is required.', 403);
 }
-async function requireOperationalAccess(user, db) {
+function requireOperationalAccess(user, permission) {
   requireReadySession(user);
-  if (user.role === 'admin') return;
-  // Linking is an explicit grant by an administrator. Check D1 on each
-  // protected request so an existing session reflects changes to that link.
-  const link = await db.prepare('SELECT 1 FROM staff WHERE user_id = ?').bind(user.id).first();
-  if (!link) fail('Staff access is required.', 403);
+  if (!hasPermission(user, permission)) fail('Stores permission is required.', 403);
 }
+
+const inventoryPermissions = new Map([
+  ['receipts', STORES_DEMANDS], ['back-orders', STORES_DEMANDS], ['purchase-orders', STORES_DEMANDS],
+  ['issues', ISSUE_KIT], ['cadet-kit', ISSUE_KIT], ['supplier-returns', RETURN_KIT]
+]);
+
 function cookie(token, seconds = SESSION_SECONDS) {
   return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${seconds}`;
 }
@@ -151,8 +139,8 @@ async function currentSession(request, db) {
   const token = (request.headers.get('Cookie') || '').split(';').map(v => v.trim())
     .find(v => v.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
-  return db.prepare(`SELECT users.*, sessions.token_hash FROM sessions
-    JOIN users ON users.id = sessions.user_id
+  return db.prepare(`SELECT staff.*, sessions.token_hash FROM sessions
+    JOIN staff ON staff.id = sessions.user_id
     WHERE token_hash = ? AND expires_at > ? AND password_hash != ? AND ${ACCOUNT_ACTIVE}`)
     .bind(await digest(token), Math.floor(Date.now() / 1000), RETIRED_BOOTSTRAP_HASH).first();
 }
@@ -161,7 +149,7 @@ async function issueSession(db, user) {
   // Compare the verified account state at insertion so a concurrent password
   // reset, deactivation or identity edit cannot create a stale session.
   const result = await db.prepare(`INSERT INTO sessions (token_hash, user_id, expires_at)
-    SELECT ?, id, ? FROM users WHERE id = ? AND password_hash = ? AND username COLLATE BINARY = ?
+    SELECT ?, id, ? FROM staff WHERE id = ? AND password_hash = ? AND username COLLATE BINARY = ?
       AND role = ? AND must_change_password = ? AND ${ACCOUNT_ACTIVE}`)
     .bind(await digest(token), Math.floor(Date.now() / 1000) + SESSION_SECONDS,
       user.id, user.password_hash, user.username, user.role, user.must_change_password).run();
@@ -175,7 +163,7 @@ async function api(request, env) {
   const management = managementRoute(path);
   const inventory = inventoryRoute(path);
   const imageSlot = brandingImageSlot(path);
-  const accountAction = /^\/api\/users\/(\d+)\/(edit|reset-password|deactivate|reactivate)$/.exec(path);
+  const accountAction = /^\/api\/(?:users|staff)\/(\d+)\/(edit|reset-password|deactivate|reactivate)$/.exec(path);
   if (!['GET', 'POST'].includes(request.method)) return json({ message: 'Method not allowed.' }, 405, { Allow: 'GET, POST' });
   if (request.method === 'POST') {
     // State changes accept only same-origin JSON requests. Browser fetch sets
@@ -203,50 +191,40 @@ async function api(request, env) {
     return json({ user: user ? publicUser(user) : null });
   }
   if (request.method === 'GET' && path === '/api/operations/access') {
-    await requireOperationalAccess(await currentSession(request, env.DB), env.DB);
-    return json({ canOperate: true });
+    const user = await currentSession(request, env.DB);
+    requireOperationalAccess(user);
+    return json({ canOperate: true, permissions: permissionNames(user.role === 'admin' ? ALL_PERMISSIONS : user.permissions) });
   }
   if (request.method === 'GET' && management) {
     const user = await currentSession(request, env.DB);
-    await requireOperationalAccess(user, env.DB);
+    const permission = management.resource === 'purchase-orders' ? STORES_DEMANDS
+      : management.resource === 'cadets' ? ISSUE_KIT : undefined;
+    requireOperationalAccess(user, permission);
     return json(await readManagement(env.DB, management, url, user));
   }
   if (request.method === 'GET' && inventory) {
     const user = await currentSession(request, env.DB);
     if (inventory.resource === 'opening-balances') requireAdministrator(user);
-    else await requireOperationalAccess(user, env.DB);
+    else requireOperationalAccess(user, inventoryPermissions.get(inventory.workflow ?? inventory.resource));
     return json(await readInventory(env.DB, inventory, url, user));
   }
-  if (request.method === 'GET' && path === '/api/users') {
+  if (request.method === 'GET' && (path === '/api/users' || path === '/api/staff')) {
     requireAdministrator(await currentSession(request, env.DB));
-    // ID-based cursors keep pages stable when new accounts are added. Fetch one
-    // extra row to detect another page without returning an unbounded user list.
-    const cursor = new URL(request.url).searchParams.get('after') ?? '0';
-    if (!/^\d{1,16}$/.test(cursor) || !Number.isSafeInteger(Number(cursor))) fail('Invalid user-list cursor.');
-    const result = await env.DB.prepare(`SELECT id, username, role, must_change_password, created_at, (${ACCOUNT_ACTIVE}) AS active
-      FROM users WHERE id > ? ORDER BY id ASC LIMIT 26`).bind(Number(cursor)).all();
-    const users = result.results.slice(0, 25).map(row => ({
+    const cursor = url.searchParams.get('after') ?? '0';
+    if (!/^\d{1,16}$/.test(cursor) || !Number.isSafeInteger(Number(cursor))) fail('Invalid account-list cursor.');
+    // Explicitly select public fields. The legacy envelopes now read the same account table.
+    const result = await env.DB.prepare(`SELECT id, username, role, must_change_password, permissions, created_at,
+      (${ACCOUNT_ACTIVE}) AS active FROM staff WHERE id > ? ORDER BY id ASC LIMIT 26`).bind(Number(cursor)).all();
+    const accounts = result.results.slice(0, 25).map(row => ({
       id: row.id,
       ...publicUser(row),
       active: Boolean(row.active),
-      createdAt: row.created_at
+      createdAt: row.created_at,
+      permissions: permissionNames(row.permissions)
     }));
-    // Only the explicitly selected public fields leave the Worker. Password
-    // hashes and session tokens are neither queried nor exposed by this endpoint.
-    return json({ users, nextCursor: result.results.length > 25 ? users[users.length - 1].id : null });
-  }
-  if (request.method === 'GET' && path === '/api/staff') {
-    requireAdministrator(await currentSession(request, env.DB));
-    const cursor = new URL(request.url).searchParams.get('after') ?? '0';
-    if (!/^\d{1,16}$/.test(cursor) || !Number.isSafeInteger(Number(cursor))) fail('Invalid staff-list cursor.');
-    // LEFT JOIN retains existing profiles without a login. Authorization uses
-    // the requesting administrator's current session, never a listed role.
-    const result = await env.DB.prepare(`SELECT s.id, users.id AS account_id, users.username, users.role,
-      users.must_change_password, (${ACCOUNT_ACTIVE}) AS active
-      FROM staff s LEFT JOIN users ON users.id = s.user_id
-      WHERE s.id > ? ORDER BY s.id ASC LIMIT 26`).bind(Number(cursor)).all();
-    const staff = result.results.slice(0, 25).map(publicStaff);
-    return json({ staff, nextCursor: result.results.length > 25 ? staff[staff.length - 1].id : null });
+    const nextCursor = result.results.length > 25 ? accounts.at(-1).id : null;
+    if (path === '/api/staff') return json({ staff: accounts.map(account => ({ id: account.id, account })), nextCursor });
+    return json({ users: accounts, nextCursor });
   }
   if (request.method !== 'POST') return json({ message: 'Not found.' }, 404);
   let uploadActor;
@@ -279,17 +257,17 @@ async function api(request, env) {
     // Usernames are unique ignoring case. Role defaults to user in the schema;
     // no role supplied by a registration request is accepted.
     const username = typeof body.username === 'string' ? body.username.trim() : '';
-    if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username)) fail('Username must contain 3–40 letters, numbers, dots, underscores or hyphens.');
+    if (!/^[a-zA-Z0-9_.-]{2,40}$/.test(username)) fail('Username must contain 2–40 letters, numbers, dots, underscores or hyphens.');
     if (username.toLowerCase() === 'admin') fail('That username is reserved.', 409);
     validatePassword(body.password);
-    const result = await env.DB.prepare('INSERT OR IGNORE INTO users (username, password_hash) VALUES (?, ?)')
+    const result = await env.DB.prepare('INSERT OR IGNORE INTO staff (username, password_hash) VALUES (?, ?)')
       .bind(username, await hashPassword(body.password)).run();
     if (!result.meta.changes) fail('That username is already registered.', 409);
     return json({ message: 'Account created. You can now log in.' }, 201);
   }
   if (path === '/api/login') {
     if (typeof body.username !== 'string' || typeof body.password !== 'string' || body.password.length > 128) fail('Incorrect username or password.', 401);
-    const user = await env.DB.prepare(`SELECT * FROM users
+    const user = await env.DB.prepare(`SELECT * FROM staff
       WHERE username = ? AND password_hash != ? AND ${ACCOUNT_ACTIVE}`)
       .bind(body.username.trim(), RETIRED_BOOTSTRAP_HASH).first();
     // Do the same password work when an account does not exist.
@@ -319,13 +297,13 @@ async function api(request, env) {
     // D1 executes this batch transactionally. Guard against concurrent changes
     // using a stale password, revoke all old sessions and issue one fresh token.
     const results = await env.DB.batch([
-      env.DB.prepare(`UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ? AND password_hash = ?
-        AND ${ACCOUNT_ACTIVE} AND EXISTS (SELECT 1 FROM sessions WHERE token_hash = ? AND user_id = users.id AND expires_at > unixepoch())`)
+      env.DB.prepare(`UPDATE staff SET password_hash = ?, must_change_password = 0 WHERE id = ? AND password_hash = ?
+        AND ${ACCOUNT_ACTIVE} AND EXISTS (SELECT 1 FROM sessions WHERE token_hash = ? AND user_id = staff.id AND expires_at > unixepoch())`)
         .bind(hash, user.id, user.password_hash, user.token_hash),
-      env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND EXISTS (SELECT 1 FROM users WHERE id = ? AND password_hash = ?)')
+      env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND EXISTS (SELECT 1 FROM staff WHERE id = ? AND password_hash = ?)')
         .bind(user.id, user.id, hash),
       env.DB.prepare(`INSERT INTO sessions (token_hash, user_id, expires_at)
-        SELECT ?, id, ? FROM users WHERE id = ? AND password_hash = ?`)
+        SELECT ?, id, ? FROM staff WHERE id = ? AND password_hash = ?`)
         .bind(await digest(token), Math.floor(Date.now() / 1000) + SESSION_SECONDS, user.id, hash)
     ]);
     if (!results[0].meta.changes) fail('Your password or session changed. Please log in again.', 409);
@@ -345,79 +323,52 @@ async function api(request, env) {
   }
   if (inventory) {
     if (inventory.action || inventory.resource === 'opening-balances') requireAdministrator(user);
-    else await requireOperationalAccess(user, env.DB);
+    else requireOperationalAccess(user, inventoryPermissions.get(inventory.workflow ?? inventory.resource));
     return json(await writeInventory(env.DB, inventory, body, user), inventory.action === 'cancel' ? 200 : 201);
   }
   if (management) {
     if (management.detail === 'summary') return json({ message: 'Method not allowed.' }, 405, { Allow: 'GET' });
-    if (management.resource === 'purchase-orders') await requireOperationalAccess(user, env.DB);
+    if (management.resource === 'purchase-orders') requireOperationalAccess(user, STORES_DEMANDS);
     else requireAdministrator(user);
     return json(await writeManagement(env.DB, management, body, user), management.detail ? 200 : 201);
   }
-  if (path === '/api/staff') {
+  if (path === '/api/staff' || path === '/api/users') {
     requireAdministrator(user);
-    const accountMode = body.accountMode === undefined ? 'create' : body.accountMode;
-    if (!['create', 'existing'].includes(accountMode)) fail('Choose whether to create or link a login.');
+    const accountMode = body.accountMode ?? 'create';
+    if (accountMode !== 'create' && !(path === '/api/staff' && accountMode === 'existing'))
+      fail('Choose whether to create or link a login.');
     const username = typeof body.username === 'string' ? body.username.trim() : '';
-    if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username)) fail('Username must contain 3-40 letters, numbers, dots, underscores or hyphens.');
-    let passwordHash;
-    if (accountMode === 'create') {
-      if (username.toLowerCase() === 'admin') fail('That username is reserved.', 409);
-      if (!['user', 'admin'].includes(body.role)) fail('Choose a valid account role.');
-      validatePassword(body.password);
-      passwordHash = await hashPassword(body.password);
+    if (!/^[a-zA-Z0-9_.-]{2,40}$/.test(username)) fail('Username must contain 2–40 letters, numbers, dots, underscores or hyphens.');
+
+    if (accountMode === 'existing') {
+      // Older clients granted all stores access in one step. Keep that operation
+      // for unprivileged accounts without broadening a partially granted account.
+      const result = await env.DB.prepare(`UPDATE staff SET permissions = ?
+        WHERE username = ? AND permissions = 0 AND ${LIVE_ADMIN} RETURNING id`)
+        .bind(ALL_PERMISSIONS, username, user.token_hash).first();
+      if (result) return json({ message: 'Stores permissions granted.' }, 201);
+      if (!await env.DB.prepare(`SELECT 1 WHERE ${LIVE_ADMIN}`).bind(user.token_hash).first())
+        fail('Your session changed. Please sign in again.', 401);
+      if (!await env.DB.prepare('SELECT id FROM staff WHERE username = ?').bind(username).first())
+        fail('No user account matches that username.', 404);
+      fail('This login already has stores permissions.', 409);
     }
-    try {
-      if (accountMode === 'create') {
-        // A plain INSERT plus one D1 batch makes profile/account creation atomic.
-        // If either unique key conflicts, the new login is rolled back as well.
-        // Select its ID by unique username instead of relying on connection-local
-        // last_insert_rowid() state across separate D1 statements.
-        const [created] = await env.DB.batch([
-          env.DB.prepare(INSERT_ADMIN_CREATED_USER).bind(username, passwordHash, body.role, user.token_hash),
-          env.DB.prepare(`${INSERT_STAFF_LINK} AND password_hash = ?`).bind(username, user.token_hash, passwordHash)
-        ]);
-        if (!created.meta.changes) fail('Your session changed. Please sign in again.', 401);
-      } else {
-        // Link from the current account row in one statement.
-        const result = await env.DB.prepare(INSERT_STAFF_LINK).bind(username, user.token_hash).run();
-        if (!result.meta.changes) {
-          if (!await env.DB.prepare(`SELECT 1 WHERE ${LIVE_ADMIN}`).bind(user.token_hash).first())
-            fail('Your session changed. Please sign in again.', 401);
-          fail('No user account matches that username.', 404);
-        }
-      }
-    } catch (error) {
-      const details = [error.message, error.cause?.message].filter(Boolean).join(' ');
-      if (/UNIQUE constraint failed:\s*(?:users\.username|staff\.user_id)/i.test(details))
-        fail('That username already exists or the login is already linked to staff.', 409);
-      throw error;
-    }
-    return json({ message: accountMode === 'create'
-      ? 'Staff account created. The user must change their temporary password on first login.'
-      : 'Existing login linked to Staff Accounts.' }, 201);
-  }
-  if (path === '/api/users') {
-    requireAdministrator(user);
-    // Account creation shares the existing JSON/origin/body/rate-limit guards.
-    // Only authenticated administrators may choose a role; public registration
-    // above continues to create ordinary users regardless of request contents.
-    const username = typeof body.username === 'string' ? body.username.trim() : '';
-    if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username)) fail('Username must contain 3-40 letters, numbers, dots, underscores or hyphens.');
+
     if (username.toLowerCase() === 'admin') fail('That username is reserved.', 409);
     if (!['user', 'admin'].includes(body.role)) fail('Choose a valid account role.');
     validatePassword(body.password);
+    const permissions = body.permissions === undefined
+      ? (path === '/api/staff' ? ALL_PERMISSIONS : 0)
+      : permissionMask(body.permissions);
     try {
       const result = await env.DB.prepare(INSERT_ADMIN_CREATED_USER)
-        .bind(username, await hashPassword(body.password), body.role, user.token_hash).run();
+        .bind(username, await hashPassword(body.password), body.role, permissions, user.token_hash).run();
       if (!result.meta.changes) fail('Your session changed. Please sign in again.', 401);
     } catch (error) {
       const details = [error.message, error.cause?.message].filter(Boolean).join(' ');
-      if (/UNIQUE constraint failed:\s*users\.username/i.test(details)) fail('That username is already registered.', 409);
+      if (/UNIQUE constraint failed:\s*staff\.username/i.test(details)) fail('That username is already registered.', 409);
       throw error;
     }
-    // Do not sign in as the new account or return its temporary password. The
-    // existing administrator session remains active after creating an account.
     return json({ message: 'Account created. The user must change their temporary password on first login.' }, 201);
   }
   return json({ message: 'Not found.' }, 404);

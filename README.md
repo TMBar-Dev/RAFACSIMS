@@ -12,7 +12,7 @@ Jump to [stores workflows](#stores-workflows), [request and data flow](#request-
 
 ## Stores workflows
 
-1. Administrators set up suppliers, cadets, catalog items and sizes. Staff account creation uses **Username**, **Password** and **Role**. Administrators can also link an existing login.
+1. Administrators set up suppliers, cadets, catalog items and sizes. Administrators manage every login in **Staff Accounts**, using a username, temporary password, role and stores permissions.
 2. Staff or administrators raise a purchase order for one supplier. Receiving stock updates the size balances. A partial delivery creates a back order for the remainder, and later deliveries close the same back order.
 3. Staff or administrators issue stock to a cadet or return stock to a supplier. Stock Management shows availability and movement history by size. Cadet Kit shows issue history and totals for unreversed issues.
 4. Administrators can cancel eligible unreceived orders or reverse posted movements with a reason. The originals and the corrections remain available in history. Transaction details support printing.
@@ -39,14 +39,16 @@ The remaining quantity is the ordered quantity minus net receipts. D1 rejects mo
 
 ### Account access
 
-| Access | Capabilities |
+| Option | Access |
 | --- | --- |
-| Administrator | Stores workflows, register maintenance, Staff Accounts, User Management, branding, cancellations and stock reversals. |
-| Linked staff | Stores workflows and active register lookups. |
-| Unlinked user | Basic dashboard and account controls. Public registration creates this level of access. |
-| Password change required | Account controls until the temporary password is replaced. |
+| User | Dashboard and account controls. Public registration begins here. |
+| Issue Kit | Issue uniform to cadets and view Cadets and Cadet Kit. |
+| Return Kit | Post and review returns to suppliers. |
+| Stores Demands | Raise and edit eligible purchase orders, receive deliveries and manage back orders. |
+| Admin | All workflows, register maintenance, staff account management, branding, cancellations and reversals. |
 
-Deactivation blocks sign-in and preserves historical attribution. The Worker checks permissions for each protected API request.
+Administrators can combine the three stores permissions for a User. Any stores permission grants access to Stock Management. The Worker checks permissions on every protected request. Newly created or reset accounts must replace their temporary password before using these features.
+
 
 ### Sign-in and session checks
 
@@ -99,10 +101,10 @@ flowchart TD
 | Browser entry, styles and navigation | `index.html`, `main.jsx`, `App.css`, `templates.jsx` |
 | Registers and orders | `registers.jsx`, `purchase-orders.jsx`, `management-ui.jsx`, `management.js`, `schema.js` |
 | Inventory and ledger | `inventory-transactions.jsx`, `inventory-pages.jsx`, `inventory-ui.jsx`, `inventory.js`, `inventory-schema.js` |
-| Accounts and branding | `staff.jsx`, `users.jsx`, `settings.jsx`, `account-admin.js`, `branding.js` |
+| Accounts and branding | `staff.jsx`, `staff-schema.js`, `settings.jsx`, `account-admin.js`, `account-permissions.js`, `branding.js` |
 | Authentication and deployment | `worker.js`, `wrangler.jsonc`, `build.mjs`, `package.json`, `package-lock.json` |
 
-The Worker initializes missing tables on API access. Keep the existing `DB` binding and D1 database ID to preserve accounts and operational records. Stock availability comes from posted movements. Database constraints and batched writes protect stock and order remainders. Request IDs support recovery when a posting response is interrupted.
+The Worker initializes missing tables on API access. D1 stores accounts in `staff` with a username, password hash, role and permissions. Keep the existing `DB` binding and D1 database ID to preserve accounts and operational records. Stock availability comes from posted movements. Database constraints and batched writes protect stock and order remainders. Request IDs support recovery when a posting response is interrupted.
 
 ## Cloudflare deployment
 
@@ -120,6 +122,12 @@ Set the Workers Builds root to the repository root. Clear the former `client/` s
 Each Cloudflare account has its own D1 database. `wrangler.jsonc` points to the original database. `wrangler.other.jsonc` points to the second account's database. Both expose the binding as `DB`. Set the second Worker's deploy command explicitly so Wrangler selects its database. The deploy identity needs access to the Worker and its configured D1 database.
 
 **Public files.** The build copies the favicon, Apple touch icon, two app icons, manifest and robots file alongside the bundled app. The `build/` binding keeps repository files, SQL exports, secrets and `V1/` outside the public asset directory.
+
+### Updating an existing database
+
+On the first API request after deployment, the Worker moves the old profile table to `legacy_staff_profiles` and renames the account table to `staff`. The migration preserves passwords, numeric account IDs, active sessions and historical references. Previously linked accounts keep all three stores permissions. Legacy profile rows remain available for historical references.
+
+Record a D1 recovery point before deploying to an existing database. A Worker version from before the migration expects the old database schema. Rolling back to that version therefore also requires a compatible database restore.
 
 ### First sign-in
 
@@ -198,32 +206,32 @@ D1 stores hashed session tokens and rate-limit entries. Authentication and user 
 | Endpoint | Request or result |
 | --- | --- |
 | `GET /api/session` | Returns the session user, or `{ "user": null }` when signed out. |
-| `GET /api/operations/access` | Returns `{ "canOperate": true }` for an administrator or linked staff member who has completed any required password change. Returns `401` when signed out and `403` for other ineligible sessions. |
+| `GET /api/operations/access` | Returns `canOperate: true` and the effective `permissions` array to a ready session with stores access. Returns `401` when signed out or `403` when access is unavailable. |
 | `POST /api/register` and `POST /api/login` | Send `username` and `password`. |
 | `POST /api/change-password` | Send `currentPassword` and `newPassword`. The Worker revokes prior sessions and issues a fresh one. |
 | `POST /api/logout` | Ends the current session. |
 
 The Worker uses Web Crypto PBKDF2 with 100,000 iterations for password hashing to fit the Worker runtime.
 
-### Staff and user management
+### Staff accounts
 
 These routes require an administrator who has completed any mandatory password change.
 
 | Endpoint | Request or result |
 | --- | --- |
-| `GET /api/users?after=0` | Lists up to 25 accounts with ID, username, role, active status, password-change status and creation time. |
-| `POST /api/users` | Send `username`, `password` and `role`. The account must change its password at first sign-in. |
-| `POST /api/users/ID/edit` | Send `username`, `role`, `previousUsername` and `previousRole`. |
-| `POST /api/users/ID/reset-password` | Send the temporary `password`. |
-| `POST /api/users/ID/deactivate` and `POST /api/users/ID/reactivate` | Send an empty JSON object. |
-| `GET /api/staff?after=0` | Lists up to 25 staff entries by staff ID. Each entry includes account ID, username, role, active status and password-change status when a login is linked. Unlinked entries have `account: null`. |
-| `POST /api/staff` | Send `username`, `password` and `role` to create a login, or `username` and `accountMode: "existing"` to link one. Returns a confirmation message. |
+| `GET /api/staff?after=0` | Lists up to 25 accounts by ID in the `staff` array. Each entry includes an `account` with username, role, permissions, active status, password-change status and creation time. |
+| `POST /api/staff` | Send `username`, `password`, `role` and an explicit `permissions` array. Usernames are 2–40 characters and temporary passwords are 12–128 characters. The account must change its password at first sign-in. |
+| `POST /api/staff/ID/edit` | Send `username`, `role`, `previousUsername`, `previousRole`, `permissions` and `previousPermissions`. |
+| `POST /api/staff/ID/reset-password` | Send the temporary `password`. |
+| `POST /api/staff/ID/deactivate` and `POST /api/staff/ID/reactivate` | Send an empty JSON object. |
 
-For the next page of either list, pass the returned `nextCursor` as `after`. A null cursor means the list is complete.
+Use `user` or `admin` for `role`. Permission keys are `issue-kit`, `return-kit` and `stores-demands`. An administrator has all workflow permissions. Pass the returned `nextCursor` as `after` for the next page.
+
+Existing clients can use `/api/users` and its `users` envelope. Older `/api/staff` create requests that omit `permissions` grant all stores permissions, and `accountMode: "existing"` grants them to an account with none.
 
 ### Registers and purchase orders
 
-Administrators and linked staff can read registers and use purchase orders. Linked staff see only active register records. Register writes require an administrator.
+Users with a stores permission can read active supplier, catalog and variant records. Reading cadets requires Issue Kit. Working with purchase orders requires Stores Demands. Register writes require an administrator.
 
 - **List and detail.** `GET /api/{cadets,suppliers,catalog,variants,purchase-orders}` returns up to 25 `records` and a `nextCursor`. Use `q` for search and `after` for the next page. Append `/ID` for a single `record`.
 - **Register filters.** Use `active=1` for pickers. Catalog and variant lists support `supplierId`. Variants also support `itemId`.
@@ -233,7 +241,7 @@ Administrators and linked staff can read registers and use purchase orders. Link
 
 ### Inventory and transaction recovery
 
-Administrators and linked staff can use inventory workflows. Cancellations, reversals and opening balance history require an administrator.
+Use the corresponding permission for issues, supplier returns, or receipts and back orders. Stock is available with any stores permission. Cancellations, reversals and opening balance history require an administrator.
 
 - **Lists and details.** `GET /api/{receipts,back-orders,issues,supplier-returns,cadet-kit,inventory-stock}` supports search and `/ID` details. Back orders expose `/summary`. Stock details expose `/ID/sizes` and `/ID/movements`. Use `orderId` on receipt history or `cadetId` on issue history.
 - **Receiving.** `POST /api/receipts` accepts `orderId`, optional `backOrderId`, optional `notes` and lines with `orderLineId` and `quantity`.

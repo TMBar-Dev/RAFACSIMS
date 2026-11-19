@@ -7,7 +7,6 @@ import '@fontsource/roboto/500.css';
 import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@mui/material';
 import { createTheme, StyledEngineProvider, ThemeProvider } from '@mui/material/styles';
 import { Dashboard, PAGES, WorkspaceNavigation, canViewPage, pageHref, readPageHash } from './templates.jsx';
-import UserManagement from './users.jsx';
 import StaffAccounts from './staff.jsx';
 import RegisterPage from './registers.jsx';
 import PurchaseOrders from './purchase-orders.jsx';
@@ -48,6 +47,7 @@ function App() {
   // `user` contains only the public account fields returned by worker.js.
   const [user, setUser] = useState(null);
   const activeUser = useRef(null);
+  const accessRequest = useRef(0);
   const [branding, setBranding] = useState({});
   const [operationalAccess, setOperationalAccess] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -136,20 +136,31 @@ function App() {
     return () => window.removeEventListener('hashchange', handleNavigation);
   }, []);
 
-  // Resolve workspace access separately so an access-check failure leaves
-  // account features available. Ignore responses for a replaced session.
+  // Access can change within a session. A slow reply must not replace a
+  // newer permission check or restore access for an earlier session.
+  const refreshOperationalAccess = useCallback(async currentUser => {
+    if (!currentUser || currentUser.mustChangePassword) return;
+    const requestNumber = ++accessRequest.current;
+    const isCurrent = () => activeUser.current === currentUser && requestNumber === accessRequest.current;
+    try {
+      const { permissions } = await api('operations/access');
+      if (isCurrent()) setOperationalAccess({ user: currentUser, permissions });
+    } catch (error) {
+      if (!isCurrent()) return;
+      if (error.status === 403) {
+        setOperationalAccess({ user: currentUser, permissions: [] });
+      } else {
+        // Retain a known result on a transient network or service failure.
+        setOperationalAccess(previous => previous?.user === currentUser
+          ? previous : { user: currentUser, error: error.message });
+      }
+    }
+  }, [api]);
+
   useEffect(() => {
-    if (!user || user.mustChangePassword) return;
-    let active = true;
-    api('operations/access')
-      .then(({ canOperate }) => {
-        if (active) setOperationalAccess({ user, allowed: canOperate === true });
-      })
-      .catch(error => {
-        if (active) setOperationalAccess({ user, allowed: false, error: error.status === 403 ? '' : error.message });
-      });
-    return () => { active = false; };
-  }, [api, user]);
+    refreshOperationalAccess(user);
+    return () => { accessRequest.current += 1; };
+  }, [refreshOperationalAccess, user]);
 
   // Restore the existing session once at startup. Ignore a response arriving
   // after unmount instead of updating a component that is no longer active.
@@ -165,16 +176,19 @@ function App() {
   // Refresh on return to the tab and periodically while it remains visible.
   useEffect(() => {
     if (!user) return;
+    let active = true;
     async function checkSession() {
       if (document.visibilityState !== 'visible') return;
       try {
         const { user: current } = await api('session');
-        if (activeUser.current !== user) return;
+        if (!active || activeUser.current !== user) return;
         if (!current && clearSession(user)) {
           setMessage('Your session ended. Please sign in again.');
         } else if (current && (current.username !== user.username || current.role !== user.role ||
             current.mustChangePassword !== user.mustChangePassword)) {
           if (clearSession(user)) updateUser(current);
+        } else if (current) {
+          await refreshOperationalAccess(user);
         }
       } catch { /* A transient network failure is not proof of session expiry. */ }
     }
@@ -182,11 +196,12 @@ function App() {
     window.addEventListener('focus', checkSession);
     document.addEventListener('visibilitychange', checkSession);
     return () => {
+      active = false;
       window.clearInterval(timer);
       window.removeEventListener('focus', checkSession);
       document.removeEventListener('visibilitychange', checkSession);
     };
-  }, [api, clearSession, updateUser, user]);
+  }, [api, clearSession, refreshOperationalAccess, updateUser, user]);
 
   // Keep submission/loading/error behavior consistent across account actions.
   async function perform(action) {
@@ -238,23 +253,23 @@ function App() {
   const showWorkspace = !loading && user && !mustChange;
   const currentPage = PAGES[page];
   const access = operationalAccess?.user === user ? operationalAccess : null;
-  const canOperate = access?.allowed === true;
+  const permissions = access?.permissions ?? [];
   const accessHeading = currentPage.adminOnly
     ? 'Administrator access required'
-    : access?.error ? 'Workspace access unavailable' : 'Staff access required';
+    : access?.error ? 'Workspace access unavailable' : 'Workflow permission required';
   const query = new URLSearchParams(hash.split('?')[1]);
 
   function workspacePage() {
     const canCorrect = user.role === 'admin';
     const postingOwner = user.username.toLowerCase();
     switch (page) {
-      case 'dashboard': return <Dashboard user={user} canOperate={canOperate} request={api} />;
-      case 'users': return <UserManagement request={api} currentUser={user} />;
+      case 'dashboard': return <Dashboard user={user} permissions={permissions} request={api} />;
       case 'staff': return <StaffAccounts request={api} currentUser={user} />;
       case 'settings': return <SettingsPage request={api} onUpdated={update => setBranding(current => ({ ...current, ...update }))} />;
       case 'orders': return <PurchaseOrders key={hash} request={api} initialId={queryId(query, 'id')} canCorrect={canCorrect}
         postingOwner={postingOwner} />;
-      case 'stock': return <StockPage key={hash} request={api} query={query} canCorrect={canCorrect} postingOwner={postingOwner} />;
+      case 'stock': return <StockPage key={hash} request={api} query={query} canCorrect={canCorrect}
+        canViewTransaction={key => canViewPage(PAGES[key], user, permissions)} />;
       case 'back-orders': return <BackOrders key={hash} request={api} query={query} />;
       case 'cadet-kit': return <CadetKit key={hash} request={api} query={query} />;
       default: return transactionPages.includes(page)
@@ -286,16 +301,16 @@ function App() {
       <main className={showWorkspace ? 'workspace' : 'account-area'}>
         {showWorkspace ? (
           <div className="workspace-shell" key={user.username.toLowerCase()}>
-            <WorkspaceNavigation page={page} user={user} canOperate={canOperate} />
+            <WorkspaceNavigation page={page} user={user} permissions={permissions} />
             <section className="workspace-content" aria-label="Page content">
               {message && <p className="message-banner" role="status" aria-live="polite">{message}</p>}
               {access?.error && <p className="error-message" role="alert">Workspace access check failed. {access.error}</p>}
-              {currentPage.operational && !access ? (
+              {currentPage.permissions && !access ? (
                 <p role="status">Checking workspace access…</p>
-              ) : !canViewPage(currentPage, user, canOperate) ? (
+              ) : !canViewPage(currentPage, user, permissions) ? (
                 <Card className="workspace-card" variant="outlined">
                   <Typography variant="h5" component="h1">{accessHeading}</Typography>
-                  {currentPage.operational && !access?.error && <p>Ask an administrator to link your login to Staff Accounts.</p>}
+                  {currentPage.permissions && !access?.error && <p>Ask an administrator to grant the required workflow permission in Staff Accounts.</p>}
                   <Button component="a" href={pageHref('dashboard')} color="primary">Return to Dashboard</Button>
                 </Card>
               ) : workspacePage()}

@@ -9,11 +9,11 @@ export const PAGES = {
   dashboard: { title: 'Dashboard', description: 'Your squadron workspace at a glance.' },
   cadets: {
     title: 'Cadets',
-    operational: true,
+    permissions: ['issue-kit'],
     description: 'A place for cadet records, flights and service information.',
   },
   orders: {
-    title: 'Orders', operational: true,
+    title: 'Orders', permissions: ['stores-demands'],
     description: 'Create and view purchase orders by supplier.'
   },
   suppliers: {
@@ -25,37 +25,32 @@ export const PAGES = {
     description: 'Maintain supplier items, uniform types and sizes.'
   },
   receipts: {
-    title: 'Receiving', operational: true,
+    title: 'Receiving', permissions: ['stores-demands'],
     description: 'Receive purchase orders and view receipt history.'
   },
   'back-orders': {
-    title: 'Back Orders', operational: true,
+    title: 'Back Orders', permissions: ['stores-demands'],
     description: 'Track and receive units still due from suppliers.'
   },
   stock: {
-    title: 'Stock Management', operational: true,
+    title: 'Stock Management', permissions: ['issue-kit', 'return-kit', 'stores-demands'],
     description: 'View live quantities, size balances and stock movements.'
   },
   issues: {
-    title: 'Issue Uniform', operational: true,
+    title: 'Issue Uniform', permissions: ['issue-kit'],
     description: 'Record uniform issued to cadets.'
   },
   'supplier-returns': {
-    title: 'Supplier Returns', operational: true,
+    title: 'Supplier Returns', permissions: ['return-kit'],
     description: 'Record stock sent back to suppliers.'
   },
   'cadet-kit': {
-    title: 'Cadet Kit', operational: true,
+    title: 'Cadet Kit', permissions: ['issue-kit'],
     description: 'Review issue history and totals by cadet.'
   },
   staff: {
     title: 'Staff Accounts',
-    description: 'Create staff logins or link existing accounts.',
-    adminOnly: true
-  },
-  users: {
-    title: 'User Management',
-    description: 'Manage sign-in accounts, roles and password resets.',
+    description: 'Manage sign-in accounts, roles, passwords and stores access.',
     adminOnly: true
   },
   settings: {
@@ -69,6 +64,8 @@ export const PAGES = {
 // dependency or changes to the Worker API. Unknown routes resolve to Dashboard.
 export function readPageHash(hash = window.location.hash) {
   const key = hash.replace(/^#\/?/, '').split('?')[0];
+  // Preserve links to User Management after moving its controls to Staff Accounts.
+  if (key === 'users') return 'staff';
   return Object.prototype.hasOwnProperty.call(PAGES, key) ? key : 'dashboard';
 }
 
@@ -77,25 +74,25 @@ export function pageHref(key) {
 }
 
 // Use the same visibility rules for links and direct routes. The Worker
-// checks the live session and staff link before serving operational data.
-export function canViewPage(page, user, canOperate) {
+// checks the live session and stores access before serving operational data.
+export function canViewPage(page, user, permissions) {
   if (page.adminOnly) return user.role === 'admin';
-  if (page.operational) return canOperate;
+  if (page.permissions) return page.permissions.some(permission => permissions.includes(permission));
   return true;
 }
 
-export function visiblePages(user, canOperate) {
-  return Object.entries(PAGES).filter(([, page]) => canViewPage(page, user, canOperate));
+export function visiblePages(user, permissions) {
+  return Object.entries(PAGES).filter(([, page]) => canViewPage(page, user, permissions));
 }
 
 const navigationGroups = [
   ['Purchasing', ['orders', 'receipts', 'back-orders']],
   ['Stock and cadets', ['stock', 'issues', 'supplier-returns', 'cadets', 'cadet-kit']],
-  ['Administration', ['suppliers', 'catalog', 'staff', 'users', 'settings']]
+  ['Administration', ['suppliers', 'catalog', 'staff', 'settings']]
 ];
 
-export function WorkspaceNavigation({ page, user, canOperate }) {
-  const available = new Set(visiblePages(user, canOperate).map(([key]) => key));
+export function WorkspaceNavigation({ page, user, permissions }) {
+  const available = new Set(visiblePages(user, permissions).map(([key]) => key));
   const link = key => (
     <a key={key} href={pageHref(key)} aria-current={page === key ? 'page' : undefined}>{PAGES[key].title}</a>
   );
@@ -119,24 +116,25 @@ export function WorkspaceNavigation({ page, user, canOperate }) {
   );
 }
 
-export function Dashboard({ user, canOperate, request }) {
+export function Dashboard({ user, permissions, request }) {
   const about = useResource(request, 'about')?.data?.aboutUs;
+  const canView = key => canViewPage(PAGES[key], user, permissions);
   return (
     <>
       <header className="page-heading">
         <Typography variant="h4" component="h1">Dashboard</Typography>
-        <p>{user.username} · {user.role === 'admin' ? 'Administrator' : canOperate ? 'Staff' : 'Member'}</p>
+        <p>{user.username} · {user.role === 'admin' ? 'Administrator' : permissions.length ? 'Staff' : 'User'}</p>
       </header>
-      {canOperate && <div className="inventory-summary">
+      {canView('orders') && <div className="inventory-summary">
         <PurchaseOrderSummary request={request} />
         <BackOrderSummary request={request} />
       </div>}
-      {canOperate && <Card className="workspace-card" variant="outlined">
+      {canView('stock') && <Card className="workspace-card" variant="outlined">
         <Typography variant="h6" component="h2">Quick actions</Typography>
         <div className="dashboard-actions">
-          <Button component="a" href="#/issues?create=1" variant="contained" color="primary">Issue uniform</Button>
+          {canView('issues') && <Button component="a" href="#/issues?create=1" variant="contained" color="primary">Issue uniform</Button>}
           <Button component="a" href={pageHref('stock')} variant="outlined" color="primary">Check stock</Button>
-          <Button component="a" href={pageHref('cadet-kit')} variant="outlined" color="primary">View cadet kit</Button>
+          {canView('cadet-kit') && <Button component="a" href={pageHref('cadet-kit')} variant="outlined" color="primary">View cadet kit</Button>}
         </div>
       </Card>}
       {about && <details className="dashboard-about">

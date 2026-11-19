@@ -106,18 +106,18 @@ test('User Management, settings and account regressions', async t => {
     assert.equal((await request('users', { cookie: login.cookie })).status, 403);
     assert.equal((await request('users', { cookie: login.cookie, body: account })).status, 403);
     assert.equal((await request('users', { cookie: adminCookie, body: account, requestOrigin: 'https://other.example' })).status, 403);
-    assert.equal(DB.database.prepare('SELECT count(*) AS total FROM users').get().total, 2);
+    assert.equal(DB.database.prepare('SELECT count(*) AS total FROM staff').get().total, 2);
   });
 
   await t.test('bounds ordinary JSON requests by actual bytes even without Content-Length', async () => {
     const result = await request('register', { body: { username: 'oversized.test', password: 'é'.repeat(2300) } });
     assert.equal(result.status, 413);
-    assert.equal(DB.database.prepare('SELECT id FROM users WHERE username = ?').get('oversized.test'), undefined);
+    assert.equal(DB.database.prepare('SELECT id FROM staff WHERE username = ?').get('oversized.test'), undefined);
   });
 
   await t.test('creates validated accounts with first-login enforcement and preserves account flows', async () => {
     assert.equal((await request('users', { cookie: adminCookie, body: account })).status, 201);
-    const record = DB.database.prepare('SELECT * FROM users WHERE username = ?').get(account.username);
+    const record = DB.database.prepare('SELECT * FROM staff WHERE username = ?').get(account.username);
     assert.equal(record.must_change_password, 1);
     assert.match(record.password_hash, /^pbkdf2\$100000\$/);
     assert.notEqual(record.password_hash, account.password);
@@ -146,8 +146,8 @@ test('User Management, settings and account regressions', async t => {
 
   await t.test('lists only safe fields with stable pagination and rejects invalid cursors', async () => {
     // Seed list fixtures directly: this test exercises pagination, not hashing.
-    const hash = DB.database.prepare('SELECT password_hash FROM users WHERE username = ?').get('admin').password_hash;
-    const insert = DB.database.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)');
+    const hash = DB.database.prepare('SELECT password_hash FROM staff WHERE username = ?').get('admin').password_hash;
+    const insert = DB.database.prepare('INSERT INTO staff (username, password_hash) VALUES (?, ?)');
     for (let i = 0; i < 27; i++) insert.run(`page.user.${i}`, hash);
     const first = await request('users', { cookie: adminCookie });
     assert.equal(first.status, 200);
@@ -158,9 +158,9 @@ test('User Management, settings and account regressions', async t => {
     assert.equal(second.data.nextCursor, null);
     const all = [...first.data.users, ...second.data.users];
     assert.equal(new Set(all.map(user => user.id)).size, all.length);
-    assert.equal(all.length, DB.database.prepare('SELECT count(*) AS total FROM users').get().total);
+    assert.equal(all.length, DB.database.prepare('SELECT count(*) AS total FROM staff').get().total);
     for (const user of all) {
-      assert.deepEqual(Object.keys(user).sort(), ['active', 'createdAt', 'id', 'mustChangePassword', 'role', 'username']);
+      assert.deepEqual(Object.keys(user).sort(), ['active', 'createdAt', 'id', 'mustChangePassword', 'permissions', 'role', 'username']);
       assert.equal(typeof user.mustChangePassword, 'boolean');
       assert.equal(typeof user.createdAt, 'number');
     }
@@ -174,7 +174,7 @@ test('User Management, settings and account regressions', async t => {
     const name = account.username;
     const oldPassword = 'ReplacementUser!456';
     const login = await request('login', { body: { username: name, password: oldPassword } });
-    const target = DB.database.prepare('SELECT id, password_hash FROM users WHERE username = ?').get(name);
+    const target = DB.database.prepare('SELECT id, password_hash FROM staff WHERE username = ?').get(name);
     const userPath = `users/${target.id}`;
     const edit = { previousUsername: name, previousRole: 'user', username: 'renamed.staff', role: 'user' };
     assert.equal((await request(`${userPath}/edit`, { body: edit })).status, 401);
@@ -182,14 +182,14 @@ test('User Management, settings and account regressions', async t => {
     assert.equal((await request(`${userPath}/edit`, { ...admin, body: { ...edit, username: 'ordinary' } })).status, 409);
     assert.equal((await request(`${userPath}/edit`, { ...admin, body: { ...edit, username: 'ADMIN' } })).status, 409);
     assert.equal((await request('staff', { ...admin, body: { accountMode: 'existing', username: name } })).status, 201);
-    const link = DB.database.prepare('SELECT id FROM staff WHERE user_id = ?').get(target.id);
+    assert.equal(DB.database.prepare('SELECT permissions FROM staff WHERE id = ?').get(target.id).permissions, 7);
     DB.database.prepare(`INSERT INTO inventory_transactions
       (kind, party_name, actor_id, actor_name, request_key, request_fingerprint, write_token)
       VALUES ('issue', 'Fixture recipient', ?, ?, 'history-test-key', 'fixture', 'history-test-write')`).run(target.id, name);
     assert.equal((await request(`${userPath}/edit`, { ...admin, body: edit })).status, 200);
     assert.equal((await request(`${userPath}/edit`, { ...admin, body: edit })).status, 409);
     assert.equal((await request('session', { cookie: login.cookie })).data.user, null);
-    assert.equal(DB.database.prepare('SELECT password_hash FROM users WHERE id = ?').get(target.id).password_hash, target.password_hash);
+    assert.equal(DB.database.prepare('SELECT password_hash FROM staff WHERE id = ?').get(target.id).password_hash, target.password_hash);
     assert.equal((await request('login', { body: { username: name, password: oldPassword } })).status, 401);
     const renamed = await request('login', { body: { username: edit.username, password: oldPassword } });
     assert.equal(renamed.status, 200);
@@ -206,9 +206,10 @@ test('User Management, settings and account regressions', async t => {
     assert.equal((await request(`${userPath}/deactivate`, { ...admin, body: {} })).status, 200);
     assert.equal((await request('session', { cookie: reset.cookie })).data.user, null);
     assert.equal((await request('login', { body: { username: edit.username, password: temporary } })).status, 401);
-    const listed = (await request('staff', admin)).data.staff.find(row => row.id === link.id);
+    const listed = (await request('staff', admin)).data.staff.find(row => row.id === target.id);
     assert.equal(listed.account.active, false);
     assert.equal(listed.account.id, target.id);
+    assert.deepEqual(listed.account.permissions, ['issue-kit', 'return-kit', 'stores-demands']);
     assert.equal((await request(`${userPath}/reactivate`, { ...admin, body: {} })).status, 200);
     assert.equal((await request('session', { cookie: reset.cookie })).data.user, null);
     const enabled = await request('login', { body: { username: edit.username, password: temporary } });
@@ -232,6 +233,27 @@ test('User Management, settings and account regressions', async t => {
       .get('history-test-key');
     assert.equal(history.actor_id, target.id);
     assert.equal(history.actor_name, name);
+  });
+
+  await t.test('updates workflow permissions without replacing a session, and rejects stale changes', async () => {
+    const login = await request('login', { body: { username: 'renamed.staff', password: 'AfterAdminReset!456' } });
+    assert.equal(login.status, 200);
+    const target = DB.database.prepare("SELECT id FROM staff WHERE username = 'renamed.staff'").get();
+    const path = `staff/${target.id}/edit`;
+    const identity = { username: 'renamed.staff', previousUsername: 'renamed.staff', role: 'user', previousRole: 'user' };
+    const all = ['issue-kit', 'return-kit', 'stores-demands'];
+    const edit = body => request(path, { cookie: adminCookie, body: { ...identity, ...body } });
+    assert.equal((await edit({ previousPermissions: all, permissions: ['stores-demands'] })).status, 200);
+    assert.equal((await edit({ previousPermissions: all, permissions: [] })).status, 409);
+    assert.equal((await edit({ previousPermissions: ['stores-demands'], permissions: ['admin'] })).status, 400);
+    const session = { cookie: login.cookie };
+    assert.deepEqual((await request('operations/access', session)).data.permissions, ['stores-demands']);
+    assert.equal((await request('purchase-orders', session)).status, 200);
+    assert.equal((await request('issues', session)).status, 403);
+    assert.equal((await request('supplier-returns', session)).status, 403);
+    assert.equal((await edit({ previousPermissions: ['stores-demands'], permissions: [] })).status, 200);
+    assert.equal((await request('operations/access', session)).status, 403);
+    assert.equal((await request('session', session)).data.user.username, 'renamed.staff');
   });
 
   await t.test('stores administrator-only settings and serves verified branding without replacing a saved image on failure', async () => {
@@ -300,7 +322,7 @@ test('User Management, settings and account regressions', async t => {
     const token = secondary.cookie.split('=')[1];
     const hash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))).toString('hex');
     DB.beforeExecute = sql => {
-      if (/INSERT INTO users/i.test(sql) && /must_change_password/i.test(sql)) {
+      if (/INSERT INTO staff/i.test(sql) && /must_change_password/i.test(sql)) {
         DB.database.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hash);
       }
     };
@@ -309,15 +331,15 @@ test('User Management, settings and account regressions', async t => {
         username: 'revoked.create', password: 'RevokedNewPassword!123', role: 'admin'
       } });
       assert.equal(result.status, 401);
-      assert.equal(DB.database.prepare('SELECT id FROM users WHERE username = ?').get('revoked.create'), undefined);
+      assert.equal(DB.database.prepare('SELECT id FROM staff WHERE username = ?').get('revoked.create'), undefined);
     } finally {
       DB.beforeExecute = undefined;
     }
   });
 
   await t.test('requires another ready administrator and serializes competing deactivations', async () => {
-    const bootstrapId = DB.database.prepare("SELECT id FROM users WHERE username = 'admin'").get().id;
-    const secondId = DB.database.prepare("SELECT id FROM users WHERE username = 'second.admin'").get().id;
+    const bootstrapId = DB.database.prepare("SELECT id FROM staff WHERE username = 'admin'").get().id;
+    const secondId = DB.database.prepare("SELECT id FROM staff WHERE username = 'second.admin'").get().id;
     assert.equal((await request(`users/${bootstrapId}/deactivate`, { cookie: adminCookie, body: {} })).status, 409);
     assert.equal((await request(`users/${bootstrapId}/reset-password`, { cookie: adminCookie, body: {
       password: 'NewAdminTemporary!123'
@@ -337,7 +359,7 @@ test('User Management, settings and account regressions', async t => {
     ]);
     assert.equal(results.filter(result => result.status === 200).length, 1);
     assert.ok(results.every(result => [200, 401, 409].includes(result.status)));
-    assert.equal(DB.database.prepare(`SELECT count(*) AS total FROM users u
+    assert.equal(DB.database.prepare(`SELECT count(*) AS total FROM staff u
       WHERE role = 'admin' AND must_change_password = 0
       AND NOT EXISTS (SELECT 1 FROM account_deactivations WHERE user_id = u.id)`).get().total, 1);
   });
@@ -349,11 +371,11 @@ test('a fresh database requires deployment-controlled administrator provisioning
   const { default: worker } = await import('./worker.js?review-no-bootstrap');
   const response = await worker.fetch(new Request('https://rafacsims.example/api/session'), { DB });
   assert.deepEqual(await response.json(), { user: null });
-  assert.equal(DB.database.prepare("SELECT id FROM users WHERE username = 'admin'").get(), undefined);
+  assert.equal(DB.database.prepare("SELECT id FROM staff WHERE username = 'admin'").get(), undefined);
   const { default: provisioned } = await import('./worker.js?review-with-bootstrap');
   const enabled = await provisioned.fetch(new Request('https://rafacsims.example/api/session'), {
     DB, ADMIN_BOOTSTRAP_PASSWORD: BOOTSTRAP
   });
   assert.equal(enabled.status, 200);
-  assert.equal(DB.database.prepare("SELECT must_change_password FROM users WHERE username = 'admin'").get().must_change_password, 1);
+  assert.equal(DB.database.prepare("SELECT must_change_password FROM staff WHERE username = 'admin'").get().must_change_password, 1);
 });

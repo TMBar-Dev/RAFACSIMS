@@ -1,6 +1,6 @@
 # CAT SIMS release checklist and development priorities
 
-Phase 7 is the owner-led release check. All 26 local schema and API tests passed during the source review. The Cloudflare build, scheduled deployment and live browser checks are still open. See [DESIGN.md](DESIGN.md) for implemented workflows and scope decisions.
+Phase 7 is the owner-led release check. All 30 local schema and API tests passed after the staff account migration and permission changes. The Cloudflare build, scheduled deployment and live browser checks are still open. See [DESIGN.md](DESIGN.md) for implemented workflows and scope decisions.
 
 ## 7. Verify the release
 
@@ -14,9 +14,11 @@ Use fresh test records. Legacy import and reconciliation are outside this releas
 
 For a fresh database, configure the [administrator bootstrap secret](README.md#first-sign-in) before first sign-in.
 
+For an existing database, record a D1 recovery point before the deployment and verify the migrated `staff` accounts, sessions and workflow permissions. See the [migration notes](README.md#updating-an-existing-database).
+
 ### Sign-in, access and registers
 
-- [ ] Check sign-in, navigation and direct links as an administrator, a linked staff member, an unlinked user and an account awaiting a mandatory password change.
+- [ ] Check sign-in, navigation and direct links as an Admin, a User without workflow permissions, accounts with each individual workflow permission, and an account awaiting a mandatory password change.
 - [ ] As an administrator, create a test cadet, supplier and sized item. Verify register search and edits. Retire a test option and confirm it disappears from new transaction pickers.
 
 - [ ] Verify the Material UI upgrade in the deployed browser. Check the sign-in layout, native selectors, quantity and password constraints, keyboard focus and print layout.

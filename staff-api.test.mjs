@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 
 const BOOTSTRAP = 'ReviewBootstrap!123';
+const ALL_PERMISSIONS = ['issue-kit', 'return-kit', 'stores-demands'];
 
 // Real SQLite and Web Crypto with only D1's result/transaction shape adapted.
 // Everything stays in memory: these tests do not contact D1, build the frontend,
@@ -18,8 +19,7 @@ class TestD1 {
     const database = this.database;
     function statement(values = []) {
       function execute() {
-        // Exercise rollback after the account INSERT, not only validation that
-        // rejects a duplicate before the transaction starts.
+        // Inject a storage failure at the account write.
         if (fixture.failStaffInsert && /INSERT\s+INTO\s+staff\b/i.test(sql)) {
           fixture.failStaffInsert = false;
           throw new Error('Simulated staff insert failure');
@@ -84,7 +84,7 @@ test('Staff Accounts and operational workflows', async t => {
   };
   let adminCookie;
 
-  await t.test('requires a changed administrator password and includes the existing admin link', async () => {
+  await t.test('requires a changed administrator password and preserves the account across initialization', async () => {
     assert.equal((await request('staff')).status, 401);
     assert.equal((await request('operations/access')).status, 401);
     assert.equal((await request('staff', { body: credentials })).status, 401);
@@ -106,39 +106,33 @@ test('Staff Accounts and operational workflows', async t => {
     assert.equal(admin.account.role, 'admin');
     assert.equal(admin.account.mustChangePassword, false);
 
-    const password = DB.database.prepare("SELECT password_hash FROM users WHERE username = 'admin'").get().password_hash;
-    DB.database.prepare('UPDATE staff SET first_name = ?, appointment = ? WHERE id = ?')
-      .run('Existing', 'Keep this appointment', admin.id);
+    const stored = DB.database.prepare('SELECT * FROM staff WHERE id = ?').get(admin.id);
     await reloadWorker();
     const after = await request('staff', { cookie: adminCookie });
     assert.equal(after.status, 200);
     const preserved = after.data.staff.find(row => row.account?.username === 'admin');
     assert.equal(preserved.id, admin.id);
-    const stored = DB.database.prepare('SELECT first_name, appointment FROM staff WHERE id = ?').get(admin.id);
-    assert.equal(stored.first_name, 'Existing');
-    assert.equal(stored.appointment, 'Keep this appointment');
-    assert.equal(DB.database.prepare("SELECT password_hash FROM users WHERE username = 'admin'").get().password_hash, password);
+    assert.deepEqual(DB.database.prepare('SELECT * FROM staff WHERE id = ?').get(admin.id), stored);
     assert.equal((await request('login', { body: { username: 'admin', password: 'ChangedAdmin!123' } })).status, 200);
     assert.equal((await request('login', { body: { username: 'admin', password: BOOTSTRAP } })).status, 401);
   });
 
   await t.test('ordinary users and cross-origin requests cannot create staff logins', async () => {
-    assert.equal((await request('register', { body: { username: 'ordinary', password: 'OrdinaryPass!123' } })).status, 201);
+    assert.equal((await request('register', {
+      body: { username: 'ordinary', password: 'OrdinaryPass!123', role: 'admin', permissions: ALL_PERMISSIONS }
+    })).status, 201);
     const ordinary = await request('login', { body: { username: 'ordinary', password: 'OrdinaryPass!123' } });
     assert.equal((await request('staff', { cookie: ordinary.cookie })).status, 403);
     assert.equal((await request('staff', { cookie: ordinary.cookie, body: credentials })).status, 403);
     assert.equal((await request('staff', { cookie: adminCookie, body: credentials, requestOrigin: 'https://other.example' })).status, 403);
-    assert.equal(DB.database.prepare('SELECT count(*) AS total FROM staff').get().total, 1);
+    assert.equal(DB.database.prepare('SELECT count(*) AS total FROM staff').get().total, 2);
   });
 
-  await t.test('creates a staff profile and usable login with mandatory first-login password change', async () => {
+  await t.test('creates a single staff account with mandatory first-login password change', async () => {
     const created = await request('staff', { cookie: adminCookie, body: credentials });
     assert.equal(created.status, 201);
-    const user = DB.database.prepare('SELECT * FROM users WHERE username = ?').get(credentials.username);
-    const staff = DB.database.prepare('SELECT * FROM staff WHERE user_id = ?').get(user.id);
-    assert.equal(staff.first_name, '-');
-    assert.equal(staff.last_name, '-');
-    assert.equal(staff.service_number, null);
+    const user = DB.database.prepare('SELECT * FROM staff WHERE username = ?').get(credentials.username);
+    assert.equal(user.permissions, 7);
     assert.equal(user.must_change_password, 1);
     assert.match(user.password_hash, /^pbkdf2\$100000\$/);
     assert.notEqual(user.password_hash, credentials.password);
@@ -164,55 +158,47 @@ test('Staff Accounts and operational workflows', async t => {
     assert.equal((await request('staff', { cookie: newAdmin.cookie, body: { ...credentials, username: 'not.allowed' } })).status, 403);
   });
 
-  await t.test('links an existing login without changing its credentials or permissions', async () => {
+  await t.test('grants legacy staff access to an existing login without changing credentials', async () => {
     assert.equal((await request('users', { cookie: adminCookie,
       body: { username: 'existing.login', password: 'ExistingLogin!123', role: 'user' } })).status, 201);
-    const before = DB.database.prepare("SELECT * FROM users WHERE username = 'existing.login'").get();
+    const before = DB.database.prepare("SELECT * FROM staff WHERE username = 'existing.login'").get();
     const body = { accountMode: 'existing', username: 'EXISTING.LOGIN' };
     assert.equal((await request('staff', { cookie: adminCookie, body })).status, 201);
-    const after = DB.database.prepare('SELECT * FROM users WHERE id = ?').get(before.id);
-    assert.deepEqual({ ...after }, { ...before });
-    assert.equal(DB.database.prepare('SELECT user_id FROM staff WHERE user_id = ?').get(before.id).user_id, before.id);
+    const after = DB.database.prepare('SELECT * FROM staff WHERE id = ?').get(before.id);
+    assert.deepEqual({ ...after }, { ...before, permissions: 7 });
     assert.equal((await request('login', { body: { username: 'existing.login', password: 'ExistingLogin!123' } })).status, 200);
     assert.equal((await request('staff', { cookie: adminCookie, body })).status, 409);
     assert.equal((await request('staff', { cookie: adminCookie, body: { ...body, username: 'missing.account' } })).status, 404);
   });
 
-  await t.test('operational access follows live roles and staff links without replacing sessions', async () => {
+  await t.test('operational access follows live roles and permissions without replacing sessions', async () => {
     const access = cookie => request('operations/access', { cookie });
-    const adminId = DB.database.prepare("SELECT id FROM users WHERE username = 'admin'").get().id;
-    const adminLink = DB.database.prepare('SELECT id FROM staff WHERE user_id = ?').get(adminId);
-    const setLink = DB.database.prepare('UPDATE staff SET user_id = ? WHERE id = ?');
-    setLink.run(null, adminLink.id);
-    assert.equal((await access(adminCookie)).status, 200);
-    setLink.run(adminId, adminLink.id);
+    const setPermissions = DB.database.prepare('UPDATE staff SET permissions = ? WHERE username = ?');
+    setPermissions.run(0, 'admin');
+    assert.deepEqual((await access(adminCookie)).data, { canOperate: true, permissions: ALL_PERMISSIONS });
+    setPermissions.run(7, 'admin');
 
     const ordinary = await request('login', { body: { username: 'ordinary', password: 'OrdinaryPass!123' } });
-    const before = DB.database.prepare("SELECT * FROM users WHERE username = 'ordinary'").get();
     assert.equal((await access(ordinary.cookie)).status, 403);
-    const linked = await request('staff', {
-      cookie: adminCookie, body: { accountMode: 'existing', username: before.username }
-    });
-    assert.equal(linked.status, 201);
+    setPermissions.run(1, 'ordinary');
     assert.deepEqual(await access(ordinary.cookie), {
-      status: 200, data: { canOperate: true }, cookie: undefined
+      status: 200, data: { canOperate: true, permissions: ['issue-kit'] }, cookie: undefined
     });
     assert.equal((await request('users', { cookie: ordinary.cookie })).status, 403);
     assert.equal((await request('staff', { cookie: ordinary.cookie })).status, 403);
-    assert.deepEqual(DB.database.prepare('SELECT * FROM users WHERE id = ?').get(before.id), before);
-
-    const link = DB.database.prepare('SELECT id FROM staff WHERE user_id = ?').get(before.id);
-    setLink.run(null, link.id);
+    setPermissions.run(0, 'ordinary');
     assert.equal((await access(ordinary.cookie)).status, 403);
-    assert.equal((await request('session', { cookie: ordinary.cookie })).data.user.username, before.username);
+    assert.equal((await request('session', { cookie: ordinary.cookie })).data.user.username, 'ordinary');
   });
 
-  await t.test('rejects invalid records and rolls back both inserts if staff creation fails', async () => {
-    const usersBefore = DB.database.prepare('SELECT count(*) AS total FROM users').get().total;
+  await t.test('rejects invalid accounts and leaves the table unchanged if staff creation fails', async () => {
     const staffBefore = DB.database.prepare('SELECT count(*) AS total FROM staff').get().total;
     assert.equal((await request('staff', { cookie: adminCookie,
       body: { ...credentials, username: 'STAFF.LOGIN' } })).status, 409);
-    for (const override of [{ username: '!' }, { role: 'owner' }, { password: 'short' }, { accountMode: 'invalid' }]) {
+    for (const override of [
+      { username: '!' }, { role: 'owner' }, { password: 'short' }, { accountMode: 'invalid' },
+      { permissions: ['not-a-permission'] }, { permissions: ['issue-kit', 'issue-kit'] }
+    ]) {
       assert.equal((await request('staff', { cookie: adminCookie,
         body: { ...credentials, username: 'invalid.staff', ...override } })).status, 400);
     }
@@ -229,14 +215,13 @@ test('Staff Accounts and operational workflows', async t => {
         body: { ...credentials, username: 'rollback.staff' } });
     } finally { console.error = originalError; }
     assert.equal(failed.status, 503);
-    assert.equal(DB.database.prepare("SELECT id FROM users WHERE username = 'rollback.staff'").get(), undefined);
-    assert.equal(DB.database.prepare('SELECT count(*) AS total FROM users').get().total, usersBefore);
+    assert.equal(DB.database.prepare("SELECT id FROM staff WHERE username = 'rollback.staff'").get(), undefined);
     assert.equal(DB.database.prepare('SELECT count(*) AS total FROM staff').get().total, staffBefore);
   });
 
-  await t.test('paginates public staff fields and includes unlinked profiles safely', async () => {
-    const insert = DB.database.prepare('INSERT INTO staff (first_name, last_name) VALUES (?, ?)');
-    for (let i = 0; i < 27; i++) insert.run('Fixture', `Person ${i}`);
+  await t.test('paginates public staff fields and includes logins without stores permissions', async () => {
+    const insert = DB.database.prepare('INSERT INTO staff (username, password_hash) VALUES (?, ?)');
+    for (let i = 0; i < 27; i++) insert.run(`staff.fixture.${i}`, 'fixture-hash');
     const first = await request('staff', { cookie: adminCookie });
     assert.equal(first.status, 200);
     assert.equal(first.data.staff.length, 25);
@@ -247,14 +232,54 @@ test('Staff Accounts and operational workflows', async t => {
     const rows = [...first.data.staff, ...second.data.staff];
     assert.equal(rows.length, DB.database.prepare('SELECT count(*) AS total FROM staff').get().total);
     assert.equal(new Set(rows.map(row => row.id)).size, rows.length);
-    assert.ok(rows.some(row => row.account === null));
+    assert.deepEqual(rows.find(row => row.account.username === 'ordinary').account.permissions, []);
     const keys = ['account', 'id'];
     for (const row of rows) {
       assert.deepEqual(Object.keys(row).sort(), keys);
-      if (row.account) assert.deepEqual(Object.keys(row.account).sort(), ['active', 'id', 'username', 'role', 'mustChangePassword'].sort());
+      assert.equal(row.account.id, row.id);
+      assert.deepEqual(Object.keys(row.account).sort(),
+        ['active', 'createdAt', 'id', 'mustChangePassword', 'permissions', 'role', 'username']);
     }
     for (const after of ['-1', 'invalid', '9007199254740992']) {
       assert.equal((await request(`staff?after=${after}`, { cookie: adminCookie })).status, 400);
+    }
+  });
+
+  await t.test('enforces each permission on workflow reads, writes and posting recovery', async () => {
+    const groups = [
+      { permission: 'issue-kit', username: 'OC', records: ['issues', 'cadet-kit', 'cadets'], writes: ['issues'] },
+      { permission: 'return-kit', username: 'Return-only', records: ['supplier-returns'], writes: ['supplier-returns'] },
+      { permission: 'stores-demands', username: 'Receipt-only', records: ['purchase-orders', 'back-orders', 'receipts'],
+        writes: ['purchase-orders', 'receipts'] }
+    ];
+    for (const { permission, username } of groups) {
+      const tempPassword = 'PermissionFixture!123';
+      const newPassword = 'PermissionChanged!456';
+      assert.equal((await request('staff', {
+        cookie: adminCookie, body: { username, password: tempPassword, role: 'user', permissions: [permission] }
+      })).status, 201);
+      const initial = await request('login', { body: { username: username.toLowerCase(), password: tempPassword } });
+      assert.equal(initial.status, 200);
+      const changed = await request('change-password', {
+        cookie: initial.cookie, body: { currentPassword: tempPassword, newPassword }
+      });
+      assert.equal(changed.status, 200);
+      const session = { cookie: changed.cookie };
+      assert.deepEqual((await request('operations/access', session)).data, { canOperate: true, permissions: [permission] });
+      assert.equal((await request('inventory-stock', session)).status, 200);
+
+      for (const group of groups) {
+        const allowed = group.permission === permission;
+        for (const path of group.records) {
+          assert.equal((await request(path, session)).status, allowed ? 200 : 403, `${permission} GET ${path}`);
+        }
+        for (const path of group.writes) {
+          // Invalid input reaching the write handler proves the permission check passed.
+          assert.equal((await request(path, { ...session, body: {} })).status, allowed ? 400 : 403, `${permission} POST ${path}`);
+          const status = await request(`posting-status/${path}/unsaved-fixture-request`, session);
+          assert.equal(status.status, allowed ? 404 : 403, `${permission} recover ${path}`);
+        }
+      }
     }
   });
 
