@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, Card, TextField, Typography } from '@material-ui/core';
+import { Button, Card, TextField, Typography } from '@mui/material';
 import { RecordPager, RecordPicker, RecordSearch, useRecords, useResource } from './management-ui.jsx';
 import { CorrectionForm, formatDate, InventoryLink, PendingPosting, PrintRecord, usePosting } from './inventory-ui.jsx';
 
@@ -65,14 +65,14 @@ function OrderEditor({ request, record, posting, onSave, onCancel }) {
               <div className="record-tools">
                 <TextField label="New line quantity" type="number" value={quantity} size="small" variant="outlined" disabled={!variant}
                   onChange={event => setQuantity(event.target.value)}
-                  inputProps={{ min: 1, max: MAX_QUANTITY, step: 1 }} />
+                  slotProps={{ htmlInput: { min: 1, max: MAX_QUANTITY, step: 1 } }} />
                 <Button type="button" color="primary" variant="outlined" disabled={!variant} onClick={addLine}>Add line</Button>
               </div>
             </div>
           )}
           {lines.length > 0 && <OrderLines lines={lines} onChange={setLines} />}
           <TextField className="order-remarks" label="Remarks" fullWidth multiline size="small" variant="outlined"
-            value={notes} inputProps={{ maxLength: 1000 }} onChange={event => setNotes(event.target.value)} />
+            value={notes} slotProps={{ htmlInput: { maxLength: 1000 } }} onChange={event => setNotes(event.target.value)} />
           <div className="record-tools">
             <Button type="submit" color="primary" variant="contained" disabled={saving || !lines.length}>
               {saving ? 'Saving…' : 'Save order'}
@@ -97,7 +97,7 @@ function OrderLines({ lines, onChange }) {
           <tr key={line.variant_id}>
             <td>{line.item_name}</td><td>{line.size}</td>
             <td>{onChange ? <TextField required type="number" size="small" variant="outlined"
-              value={line.quantity} inputProps={{ min: 1, max: MAX_QUANTITY, step: 1, 'aria-label': `Quantity for ${line.item_name}, size ${line.size}` }}
+              value={line.quantity} slotProps={{ htmlInput: { min: 1, max: MAX_QUANTITY, step: 1, 'aria-label': `Quantity for ${line.item_name}, size ${line.size}` } }}
               onChange={event => {
                 const quantity = event.target.value;
                 onChange(lines => lines.map(value => value.variant_id === line.variant_id ? { ...value, quantity } : value));

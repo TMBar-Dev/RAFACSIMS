@@ -19,6 +19,8 @@ For a fresh database, configure the [administrator bootstrap secret](README.md#f
 - [ ] Check sign-in, navigation and direct links as an administrator, a linked staff member, an unlinked user and an account awaiting a mandatory password change.
 - [ ] As an administrator, create a test cadet, supplier and sized item. Verify register search and edits. Retire a test option and confirm it disappears from new transaction pickers.
 
+- [ ] Verify the Material UI upgrade in the deployed browser. Check the sign-in layout, native selectors, quantity and password constraints, keyboard focus and print layout.
+
 ### Order, receipt and stock correction
 
 Use one test size starting at zero stock so changes can be checked against the ledger.
@@ -49,5 +51,5 @@ Use one test size starting at zero stock so changes can be checked against the l
 
 1. **Fix problems found during the stores pilot.** Observe a staff member raising a multi-size order, receiving part of it, finding stock and printing an issue. Prioritise failures that block posting or make it unclear whether a save succeeded. Check keyboard navigation, narrow screens, print output, stale edits and interrupted saves.
 2. **Make production support repeatable.** Document how to identify the deployed commit, detect failed builds or Worker errors, roll back code and recover D1. Exercise recovery in a separate database and check account access, open order quantities and stock totals afterwards.
-3. **Plan the dependency upgrade separately.** Audit the lockfile and address actionable advisories. Assess supported React and Material UI versions and check layout, dialogs, controls and printing against the release baseline.
+3. **Plan future dependency upgrades separately.** Audit the lockfile and address actionable advisories. Assess supported React and Material UI versions and check layout, dialogs, controls and printing against the release baseline.
 4. **Confirm demand before adding workflows.** Find out which recurring tasks stores staff cannot complete. Cadet handbacks, current holdings and CSV exchange need explicit requirements. Legacy migration remains outside this release.

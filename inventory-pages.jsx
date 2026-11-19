@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, Card, Typography } from '@material-ui/core';
+import { Button, Card, Typography } from '@mui/material';
 import { useResource } from './management-ui.jsx';
 import {
   CorrectionForm, DataTable, formatDate, InventoryHeading, InventoryLink, InventoryList, PrintRecord, queryId

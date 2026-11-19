@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Card, Typography } from '@material-ui/core';
+import { Button, Card, Typography } from '@mui/material';
 import { PurchaseOrderSummary } from './purchase-orders.jsx';
 import { BackOrderSummary } from './inventory-pages.jsx';
 import { useResource } from './management-ui.jsx';

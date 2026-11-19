@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, TextField } from '@material-ui/core';
+import { Button, TextField } from '@mui/material';
 
 export function useResource(request, path, revision = 0) {
   const [result, setResult] = useState(null);
@@ -36,7 +36,7 @@ export function RecordSearch({ label, onSearch }) {
   return (
     <div className="record-tools">
       <TextField label={label} size="small" variant="outlined" value={value}
-        inputProps={{ maxLength: 120 }} onChange={event => setValue(event.target.value)}
+        slotProps={{ htmlInput: { maxLength: 120 } }} onChange={event => setValue(event.target.value)}
         onKeyDown={event => {
           if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
           event.preventDefault();
@@ -68,7 +68,7 @@ export function RecordPicker({ request, endpoint, label, value, onChange, format
     <div className="record-picker">
       <RecordSearch label={`Search ${label.toLowerCase()} choices`} onSearch={list.search} />
       <TextField fullWidth select label={label} variant="outlined" size="small"
-        SelectProps={{ native: true }} InputLabelProps={{ shrink: true }} value={value?.id ?? ''}
+        slotProps={{ select: { native: true }, inputLabel: { shrink: true } }} value={value?.id ?? ''}
         disabled={!options.length}
         onChange={event => onChange(options.find(record => record.id === Number(event.target.value)) ?? null)}>
         <option value="">Select {label.toLowerCase()}</option>

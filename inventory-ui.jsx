@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Card, TextField, Typography } from '@material-ui/core';
+import { Button, Card, TextField, Typography } from '@mui/material';
 import { RecordPager, RecordSearch, useRecords } from './management-ui.jsx';
 
 const dateFormat = new Intl.DateTimeFormat('en-GB', {
@@ -203,7 +203,7 @@ export function CorrectionForm({ request, endpoint, label, onSave, onClose }) {
       <form onSubmit={event => { event.preventDefault(); post(endpoint, { reason }, onSave); }}>
         <fieldset disabled={saving} className="record-fieldset">
           <TextField className="order-remarks" fullWidth required label="Reason" variant="outlined" value={reason}
-            onChange={event => setReason(event.target.value)} inputProps={{ maxLength: 1000 }} />
+            onChange={event => setReason(event.target.value)} slotProps={{ htmlInput: { maxLength: 1000 } }} />
           <div className="record-tools">
             <Button type="submit" variant="contained" color="secondary" disabled={!reason.trim()}>
               {saving ? 'Saving…' : `Confirm ${label.toLowerCase()}`}

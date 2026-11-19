@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, Card, TextField, Typography } from '@material-ui/core';
+import { Button, Card, TextField, Typography } from '@mui/material';
 import { RecordPicker, useResource } from './management-ui.jsx';
 import {
   CorrectionForm, DataTable, formatDate, InventoryHeading, InventoryLink, InventoryList,
@@ -21,7 +21,7 @@ function cadetLabel(cadet) {
 
 function RemarksField({ notes, setNotes }) {
   return <TextField className="order-remarks" label="Remarks" fullWidth multiline size="small" variant="outlined"
-    value={notes} onChange={event => setNotes(event.target.value)} inputProps={{ maxLength: 1000 }} />;
+    value={notes} onChange={event => setNotes(event.target.value)} slotProps={{ htmlInput: { maxLength: 1000 } }} />;
 }
 
 function ReceiptForm({ posting, order, backOrderId, onSave }) {
@@ -37,7 +37,7 @@ function ReceiptForm({ posting, order, backOrderId, onSave }) {
     ['Previously received', 'received'], ['Remaining', 'remaining'],
     ['Receive now', line => <TextField type="number" variant="outlined" size="small"
       value={quantities[line.id] ?? 0}
-      inputProps={{ min: 0, max: line.remaining, step: 1, 'aria-label': `Receive ${line.item_name}, size ${line.size}` }}
+      slotProps={{ htmlInput: { min: 0, max: line.remaining, step: 1, 'aria-label': `Receive ${line.item_name}, size ${line.size}` } }}
       onChange={event => {
         const quantity = event.target.value;
         setQuantities(values => ({ ...values, [line.id]: quantity }));
@@ -128,7 +128,7 @@ function OutboundForm({ request, page, posting, onSave }) {
                 .filter(Boolean).join(' · ')} />
             <div className="record-tools">
               <TextField disabled={!variant} label="New line quantity" type="number" value={quantity}
-                size="small" variant="outlined" inputProps={{ min: 1, step: 1 }}
+                size="small" variant="outlined" slotProps={{ htmlInput: { min: 1, step: 1 } }}
                 onChange={event => setQuantity(event.target.value)} />
               <Button type="button" variant="outlined" disabled={!variant || (lines.length >= 50 && !lines.some(line => line.id === variant?.id))}
                 onClick={addLine}>Add line</Button>

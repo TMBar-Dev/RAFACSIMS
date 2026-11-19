@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Card, TextField, Typography } from '@material-ui/core';
+import { Button, Card, TextField, Typography } from '@mui/material';
 
 function createdDate(seconds) {
   if (!Number.isInteger(seconds) || seconds <= 0) return 'Unknown';
@@ -53,7 +53,7 @@ function AccountActions({ account, saving, error, onSave, onClose, onActionChang
         {[
           ['edit', 'Edit details'], ['reset-password', 'Reset password'], [accessAction, accessLabel]
         ].map(([value, label]) => <Button key={value} type="button" variant="outlined" aria-pressed={action === value}
-          color={action === value ? 'primary' : 'default'} disabled={saving} onClick={() => select(value)}>{label}</Button>)}
+          color={action === value ? 'primary' : 'inherit'} disabled={saving} onClick={() => select(value)}>{label}</Button>)}
       </div>
       <form onSubmit={submit} aria-busy={saving}>
         <fieldset className="record-fieldset" disabled={saving}>
@@ -63,9 +63,9 @@ function AccountActions({ account, saving, error, onSave, onClose, onActionChang
                 <TextField required disabled={bootstrap} label="Username" variant="outlined" size="small" value={username}
                   onChange={event => setUsername(event.target.value)}
                   helperText={bootstrap ? 'Reserved for the bootstrap account.' : '3–40 letters, numbers, dots, underscores or hyphens.'}
-                  inputProps={{ minLength: 3, maxLength: 40, pattern: '[a-zA-Z0-9_.\\-]{3,40}' }} />
+                  slotProps={{ htmlInput: { minLength: 3, maxLength: 40, pattern: '[a-zA-Z0-9_.\\-]{3,40}' } }} />
                 <TextField required select label="Role" variant="outlined" size="small" value={role}
-                  onChange={event => setRole(event.target.value)} SelectProps={{ native: true }}>
+                  onChange={event => setRole(event.target.value)} slotProps={{ select: { native: true } }}>
                   <option value="user">Member</option>
                   <option value="admin">Administrator</option>
                 </TextField>
@@ -77,10 +77,10 @@ function AccountActions({ account, saving, error, onSave, onClose, onActionChang
               <div className="detail-grid">
                 <TextField required label="Temporary password" type="password" autoComplete="new-password"
                   variant="outlined" size="small" value={password} onChange={event => setPassword(event.target.value)}
-                  inputProps={{ minLength: 12, maxLength: 128 }} />
+                  slotProps={{ htmlInput: { minLength: 12, maxLength: 128 } }} />
                 <TextField required label="Confirm temporary password" type="password" autoComplete="new-password"
                   variant="outlined" size="small" value={confirmation} onChange={event => setConfirmation(event.target.value)}
-                  inputProps={{ minLength: 12, maxLength: 128 }} />
+                  slotProps={{ htmlInput: { minLength: 12, maxLength: 128 } }} />
               </div>
               <p className="muted">The user is signed out and must replace the temporary password on their next sign-in.</p>
             </>
@@ -212,10 +212,10 @@ export default function UserManagement({ request, currentUser }) {
           <div className="detail-grid">
             <TextField required disabled={disabled} label="Username" variant="outlined" size="small"
               value={username} autoComplete="off" onChange={event => setUsername(event.target.value)}
-              inputProps={{ minLength: 3, maxLength: 40, pattern: '[a-zA-Z0-9_.\\-]{3,40}' }}
+              slotProps={{ htmlInput: { minLength: 3, maxLength: 40, pattern: '[a-zA-Z0-9_.\\-]{3,40}' } }}
               helperText="3-40 letters, numbers, dots, underscores or hyphens." />
             <TextField required disabled={disabled} select label="Role" variant="outlined" size="small"
-              SelectProps={{ native: true }} value={role} onChange={event => setRole(event.target.value)}>
+              slotProps={{ select: { native: true } }} value={role} onChange={event => setRole(event.target.value)}>
               <option value="user">Member</option>
               <option value="admin">Administrator</option>
             </TextField>
@@ -223,11 +223,11 @@ export default function UserManagement({ request, currentUser }) {
           <div className="detail-grid">
             <TextField required disabled={disabled} label="Temporary password" type="password"
               variant="outlined" size="small" autoComplete="new-password" value={password}
-              onChange={event => setPassword(event.target.value)} inputProps={{ minLength: 12, maxLength: 128 }}
+              onChange={event => setPassword(event.target.value)} slotProps={{ htmlInput: { minLength: 12, maxLength: 128 } }}
               helperText="12-128 characters. Share it with the user separately." />
             <TextField required disabled={disabled} label="Confirm temporary password" type="password"
               variant="outlined" size="small" autoComplete="new-password" value={confirmation}
-              onChange={event => setConfirmation(event.target.value)} inputProps={{ minLength: 12, maxLength: 128 }} />
+              onChange={event => setConfirmation(event.target.value)} slotProps={{ htmlInput: { minLength: 12, maxLength: 128 } }} />
           </div>
           <p className="muted">An administrator can create other accounts. Choose Member unless administrator access is needed.</p>
           <Button type="submit" variant="contained" color="primary" disabled={disabled}>

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Card, TextField, Typography } from '@material-ui/core';
+import { Button, Card, TextField, Typography } from '@mui/material';
 import { RecordPager, RecordPicker, RecordSearch, useRecords, useResource } from './management-ui.jsx';
 
 const activeStatuses = { active: 'Active', inactive: 'Inactive' };
@@ -102,9 +102,12 @@ function RegisterEditor({ request, resource, record, itemId, onSave, onCancel })
             {config.fields.map(field => (
               <TextField key={field.key} label={field.label} variant="outlined" size="small"
                 required={field.required} type={field.type} select={Boolean(field.options)}
-                multiline={field.multiline} SelectProps={{ native: true }}
-                InputLabelProps={field.options || field.type === 'date' ? { shrink: true } : undefined}
-                inputProps={{ maxLength: field.max, readOnly: Boolean(record && field.key === 'size') }}
+                multiline={field.multiline}
+                slotProps={{
+                  select: { native: true },
+                  inputLabel: field.options || field.type === 'date' ? { shrink: true } : undefined,
+                  htmlInput: { maxLength: field.max, readOnly: Boolean(record && field.key === 'size') }
+                }}
                 value={values[field.key]} onChange={event => {
                   const value = event.target.value;
                   setValues(values => ({ ...values, [field.key]: value }));

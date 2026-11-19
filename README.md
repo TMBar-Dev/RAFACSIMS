@@ -77,7 +77,7 @@ The diagram follows a successful sign-in. On page load, the browser can restore 
 
 ## Architecture and repository layout
 
-The source lives at the repository root. React 17 and Material UI 4 provide the interface. esbuild bundles scripts, styles, fonts and imported images into `build/` with content-hashed filenames. Wrangler deploys the Worker and the static assets together. Requests to `/api/*` reach the Worker first. Other paths use the asset binding and the single-page application fallback.
+The source lives at the repository root. React 17 and Material UI 7 provide the interface. esbuild bundles scripts, styles, fonts and imported images into `build/` with content-hashed filenames. Wrangler deploys the Worker and the static assets together. Requests to `/api/*` reach the Worker first. Other paths use the asset binding and the single-page application fallback.
 
 ### Request and data flow
 
@@ -174,6 +174,8 @@ Browser and home-screen icons use the bundled carton artwork. The ImageGen-produ
 
 Use Node.js 22.12 or later and npm 10.9.2 from the repository root. Regenerate the lockfile with that npm version when changing dependencies.
 
+Material UI uses Emotion for styling. `package.json` pins `react-is` to the React version so Material UI recognises React 17 elements correctly. Update those versions together.
+
 `npm run dev` provides a frontend-only preview at `127.0.0.1:5173`. Restart it after changing the HTML template or copied public assets. Use the deployed app for Worker and D1 workflows.
 
 - `npm test` runs the Node.js SQLite-backed schema and API tests without writing to live D1. If the shell blocks child processes, use `node --test --test-isolation=none *.test.mjs` on Node 24.
@@ -183,7 +185,7 @@ Use Node.js 22.12 or later and npm 10.9.2 from the repository root. Regenerate t
 
 ## Development focus
 
-Complete owner-led release verification first, including the Monday deployment and a full stores workflow through stock correction. Use pilot feedback to prioritize navigation, forms, interrupted saves and printing. Document D1 recovery and monitoring, then plan the React and Material UI upgrade separately from feature work. See the [prioritized backlog](TODO.md#development-after-release-verification).
+Complete owner-led release verification first, including the Monday deployment and a full stores workflow through stock correction. Use pilot feedback to prioritize navigation, forms, interrupted saves and printing. Document D1 recovery and monitoring, then plan the next React and Material UI upgrades separately from feature work. See the [prioritized backlog](TODO.md#development-after-release-verification).
 
 ## API
 

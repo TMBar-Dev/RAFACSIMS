@@ -4,8 +4,8 @@ import './App.css';
 import storesCover from './stores-cover.jpg';
 import '@fontsource/roboto/400.css';
 import '@fontsource/roboto/500.css';
-import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@material-ui/core';
-import { createMuiTheme, ThemeProvider } from '@material-ui/core/styles';
+import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@mui/material';
+import { createTheme, StyledEngineProvider, ThemeProvider } from '@mui/material/styles';
 import { Dashboard, PAGES, WorkspaceNavigation, canViewPage, pageHref, readPageHash } from './templates.jsx';
 import UserManagement from './users.jsx';
 import StaffAccounts from './staff.jsx';
@@ -18,9 +18,14 @@ import SettingsPage from './settings.jsx';
 
 const transactionPages = ['receipts', 'issues', 'supplier-returns'];
 const printPages = ['orders', 'back-orders', ...transactionPages];
-const theme = createMuiTheme({
+const theme = createTheme({
   palette: { primary: { main: '#23415d' }, secondary: { main: '#9d3931' } },
-  shape: { borderRadius: 8 }
+  shape: { borderRadius: 8 },
+  components: {
+    // Preserve the sign-in fields and neutral buttons that used v4 defaults.
+    MuiTextField: { defaultProps: { variant: 'standard' } },
+    MuiButton: { defaultProps: { color: 'inherit' } }
+  }
 });
 
 // The interface and API share an origin. The browser sends the HttpOnly session
@@ -303,7 +308,7 @@ function App() {
               <Typography variant="h5" component="h1">Change your password</Typography>
               <p>{user.mustChangePassword ? 'You must replace your initial password before continuing.' : 'Choose a new password for your account.'}</p>
               <TextField fullWidth required label="Current password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
-              <TextField fullWidth required label="New password" type="password" autoComplete="new-password" value={newPassword} inputProps={{ minLength: 12, maxLength: 128 }} onChange={e => setNewPassword(e.target.value)} helperText="Use 12–128 characters." />
+              <TextField fullWidth required label="New password" type="password" autoComplete="new-password" value={newPassword} slotProps={{ htmlInput: { minLength: 12, maxLength: 128 } }} onChange={e => setNewPassword(e.target.value)} helperText="Use 12–128 characters." />
               <TextField fullWidth required label="Confirm new password" type="password" autoComplete="new-password" value={confirmation} onChange={e => setConfirmation(e.target.value)} />
               <Button type="submit" variant="contained" color="primary" disabled={busy}>Save password</Button>
             </form>
@@ -311,8 +316,8 @@ function App() {
             <form onSubmit={login}>
               {systemName !== shortName && <Typography>{systemName}</Typography>}
               <Typography variant="h5" component="h1">Sign in or register</Typography>
-              <TextField fullWidth required label="Username" autoComplete="username" value={username} inputProps={{ maxLength: 40 }} onChange={e => setUsername(e.target.value)} />
-              <TextField fullWidth required label="Password" type="password" autoComplete="current-password" value={password} inputProps={{ maxLength: 128 }} onChange={e => setPassword(e.target.value)} />
+              <TextField fullWidth required label="Username" autoComplete="username" value={username} slotProps={{ htmlInput: { maxLength: 40 } }} onChange={e => setUsername(e.target.value)} />
+              <TextField fullWidth required label="Password" type="password" autoComplete="current-password" value={password} slotProps={{ htmlInput: { maxLength: 128 } }} onChange={e => setPassword(e.target.value)} />
               <Button type="submit" variant="contained" color="primary" disabled={busy}>Sign in</Button>
               <Button type="button" disabled={busy} onClick={register}>Register</Button>
               <p>New accounts require a password of at least 12 characters.</p>
@@ -326,4 +331,10 @@ function App() {
   );
 }
 
-ReactDOM.render(<ThemeProvider theme={theme}><App /></ThemeProvider>, document.getElementById('root'));
+// Insert Emotion styles first so App.css can continue overriding MUI defaults.
+ReactDOM.render(
+  <StyledEngineProvider injectFirst>
+    <ThemeProvider theme={theme}><App /></ThemeProvider>
+  </StyledEngineProvider>,
+  document.getElementById('root')
+);

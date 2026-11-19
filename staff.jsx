@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Card, TextField, Typography } from '@material-ui/core';
+import { Button, Card, TextField, Typography } from '@mui/material';
 
 export default function StaffAccounts({ request, currentUser }) {
   const [staff, setStaff] = useState([]);
@@ -100,16 +100,16 @@ export default function StaffAccounts({ request, currentUser }) {
           <div className="detail-grid">
             <TextField required disabled={disabled} label="Username"
               variant="outlined" size="small" value={username} autoComplete="off"
-              inputProps={{ minLength: 3, maxLength: 40, pattern: '[a-zA-Z0-9_.\\-]{3,40}' }}
+              slotProps={{ htmlInput: { minLength: 3, maxLength: 40, pattern: '[a-zA-Z0-9_.\\-]{3,40}' } }}
               onChange={event => setUsername(event.target.value)} />
             {accountMode === 'create' && (
               <>
                 <TextField required disabled={disabled} label="Password" type="password"
                   autoComplete="new-password" variant="outlined" size="small" value={password}
-                  inputProps={{ minLength: 12, maxLength: 128 }} onChange={event => setPassword(event.target.value)}
+                  slotProps={{ htmlInput: { minLength: 12, maxLength: 128 } }} onChange={event => setPassword(event.target.value)}
                   helperText="12-128 characters. The user must change it on first sign-in." />
                 <TextField required disabled={disabled} select label="Role" variant="outlined" size="small"
-                  SelectProps={{ native: true }} value={role} onChange={event => setRole(event.target.value)}>
+                  slotProps={{ select: { native: true } }} value={role} onChange={event => setRole(event.target.value)}>
                   <option value="user">User</option>
                   <option value="admin">Administrator</option>
                 </TextField>

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Card, TextField, Typography } from '@material-ui/core';
+import { Button, Card, TextField, Typography } from '@mui/material';
 import { useResource } from './management-ui.jsx';
 import { usePosting } from './inventory-ui.jsx';
 import storesCover from './stores-cover.jpg';
@@ -32,13 +32,13 @@ function BrandingText({ request, settings, onUpdated }) {
         <fieldset className="record-fieldset" disabled={saving}>
           <div className="detail-grid">
             <TextField required label="System name" size="small" variant="outlined" value={name}
-              onChange={event => { setSaved(false); setName(event.target.value); }} inputProps={{ maxLength: 100 }} />
+              onChange={event => { setSaved(false); setName(event.target.value); }} slotProps={{ htmlInput: { maxLength: 100 } }} />
             <TextField required label="Short name" size="small" variant="outlined" value={shortName}
-              onChange={event => { setSaved(false); setShortName(event.target.value); }} inputProps={{ maxLength: 32 }} />
+              onChange={event => { setSaved(false); setShortName(event.target.value); }} slotProps={{ htmlInput: { maxLength: 32 } }} />
           </div>
           <TextField fullWidth multiline rows={3} className="order-remarks" label="About Us" variant="outlined"
             value={aboutUs} onChange={event => { setSaved(false); setAboutUs(event.target.value); }}
-            inputProps={{ maxLength: 2000 }} helperText="Shown on the signed-in dashboard." />
+            slotProps={{ htmlInput: { maxLength: 2000 } }} helperText="Shown on the signed-in dashboard." />
           <div className="record-tools"><Button type="submit" color="primary" variant="contained">
             {saving ? 'Saving…' : 'Save system details'}
           </Button></div>
