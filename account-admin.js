@@ -2,6 +2,20 @@ import { constraintError, fail, integer } from './management.js';
 import { permissionMask } from './account-permissions.js';
 
 export const ACCOUNT_ADMIN_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS security_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id INTEGER,
+    target_id INTEGER,
+    action TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  ...['UPDATE', 'DELETE'].map(action => `CREATE TRIGGER IF NOT EXISTS security_events_no_${action.toLowerCase()}
+    BEFORE ${action} ON security_events BEGIN SELECT RAISE(ABORT, 'security event history is append-only'); END`),
+  // Only administrator-issued credentials can be used for a new access grant.
+  `CREATE TABLE IF NOT EXISTS staff_verified_credentials (
+    user_id INTEGER PRIMARY KEY REFERENCES staff(id) ON DELETE CASCADE
+  )`,
   // A disabled login keeps its staff account ID and operational history.
   `CREATE TABLE IF NOT EXISTS account_deactivations (
     user_id INTEGER PRIMARY KEY REFERENCES staff(id) ON DELETE CASCADE,
@@ -20,6 +34,8 @@ export const ACCOUNT_ADMIN_SCHEMA = [
     END`
 ];
 
+export const VERIFIED_CREDENTIALS = 'EXISTS (SELECT 1 FROM staff_verified_credentials WHERE user_id = staff.id)';
+
 export const ACCOUNT_ACTIVE = 'NOT EXISTS (SELECT 1 FROM account_deactivations d WHERE d.user_id = staff.id)';
 
 // Recheck the author's authority in the write. A ready administrator can only
@@ -27,13 +43,25 @@ export const ACCOUNT_ACTIVE = 'NOT EXISTS (SELECT 1 FROM account_deactivations d
 export const LIVE_ADMIN = `EXISTS (
   SELECT 1 FROM sessions JOIN staff ON staff.id = sessions.user_id
   WHERE sessions.token_hash = ? AND sessions.expires_at > unixepoch()
+    AND EXISTS (SELECT 1 FROM session_activity WHERE token_hash = sessions.token_hash AND last_active > unixepoch() - 1800)
     AND staff.role = 'admin' AND staff.must_change_password = 0 AND ${ACCOUNT_ACTIVE}
 )`;
+
+// Must immediately follow the guarded write in the same D1 batch.
+export function securityEvent(db, actorId, targetId, action, summary = '') {
+  return db.prepare(`INSERT INTO security_events (actor_id, target_id, action, summary)
+    SELECT ?, ?, ?, ? WHERE changes() > 0`).bind(actorId, targetId, action, summary);
+}
+
+export async function auditedChange(db, statement, actorId, targetId, action, summary) {
+  const [result] = await db.batch([statement, securityEvent(db, actorId, targetId, action, summary)]);
+  return result.results[0];
+}
 
 export async function administerAccount(db, actor, targetId, action, body, preparePassword) {
   const id = integer(Number(targetId), 'Account ID');
   if (id === actor.id) fail('Another administrator must manage this account. Use Change password for your own password.', 409);
-  const target = await db.prepare('SELECT username, role, password_hash, permissions FROM staff WHERE id = ?').bind(id).first();
+  const target = await db.prepare(`SELECT username, role, password_hash, permissions, (${VERIFIED_CREDENTIALS}) AS verified FROM staff WHERE id = ?`).bind(id).first();
   if (!target) fail('Account not found.', 404);
   const authority = actor.token_hash;
   let result;
@@ -50,10 +78,16 @@ export async function administerAccount(db, actor, targetId, action, body, prepa
       const permissions = body.permissions === undefined ? target.permissions : permissionMask(body.permissions);
       if (body.permissions !== undefined && permissionMask(body.previousPermissions) !== target.permissions)
         fail('The account permissions changed. Refresh the account list and try again.', 409);
+      const grantsAccess = target.role !== 'admin' && (body.role === 'admin' || Boolean(permissions & ~target.permissions));
+      if (grantsAccess && !target.verified)
+        fail('Reset this account?s password and hand it to the intended user before granting additional access.', 409);
       try {
-        result = await db.prepare(`UPDATE staff SET username = ?, role = ?, permissions = ?
+        result = await auditedChange(db, db.prepare(`UPDATE staff SET username = ?, role = ?, permissions = ?
           WHERE id = ? AND username COLLATE BINARY = ? AND role = ? AND permissions = ? AND ${LIVE_ADMIN} RETURNING id`)
-          .bind(username, body.role, permissions, id, target.username, target.role, target.permissions, authority).first();
+          .bind(username, body.role, permissions, id, target.username, target.role, target.permissions, authority), actor.id, id, 'account.edit', JSON.stringify({
+            before: { username: target.username, role: target.role, permissions: target.permissions },
+            after: { username, role: body.role, permissions }
+          }));
       } catch (error) {
         if (/UNIQUE constraint failed:\s*staff\.username/i.test(constraintError(error)))
           fail('That username is already registered.', 409);
@@ -63,25 +97,28 @@ export async function administerAccount(db, actor, targetId, action, body, prepa
       break;
     }
     case 'reset-password': {
-      const hash = await preparePassword(body.password, target.password_hash);
+      const hash = await preparePassword(body.password, target.password_hash, target.username);
       const [updated] = await db.batch([
         db.prepare(`UPDATE staff SET password_hash = ?, must_change_password = 1
           WHERE id = ? AND password_hash = ? AND ${LIVE_ADMIN}`).bind(hash, id, target.password_hash, authority),
+        securityEvent(db, actor.id, id, 'account.reset-password'),
         db.prepare(`DELETE FROM sessions WHERE user_id = ?
-          AND EXISTS (SELECT 1 FROM staff WHERE id = ? AND password_hash = ?)`).bind(id, id, hash)
+          AND EXISTS (SELECT 1 FROM staff WHERE id = ? AND password_hash = ?)`).bind(id, id, hash),
+        db.prepare(`INSERT OR IGNORE INTO staff_verified_credentials (user_id)
+          SELECT id FROM staff WHERE id = ? AND password_hash = ?`).bind(id, hash)
       ]);
       if (updated.meta.changes) return { message: 'Temporary password set. Previous sessions were revoked.' };
       break;
     }
     case 'deactivate':
-      result = await db.prepare(`INSERT INTO account_deactivations (user_id, actor_id, actor_name)
+      result = await auditedChange(db, db.prepare(`INSERT INTO account_deactivations (user_id, actor_id, actor_name)
         SELECT id, ?, ? FROM staff WHERE id = ? AND ${LIVE_ADMIN}
-        ON CONFLICT(user_id) DO NOTHING RETURNING user_id`).bind(actor.id, actor.username, id, authority).first();
+        ON CONFLICT(user_id) DO NOTHING RETURNING user_id`).bind(actor.id, actor.username, id, authority), actor.id, id, 'account.deactivate');
       if (result) return { message: 'Account deactivated. Previous sessions were revoked.' };
       break;
     case 'reactivate':
-      result = await db.prepare(`DELETE FROM account_deactivations
-        WHERE user_id = ? AND ${LIVE_ADMIN} RETURNING user_id`).bind(id, authority).first();
+      result = await auditedChange(db, db.prepare(`DELETE FROM account_deactivations
+        WHERE user_id = ? AND ${LIVE_ADMIN} RETURNING user_id`).bind(id, authority), actor.id, id, 'account.reactivate');
       if (result) return { message: 'Account reactivated. The user can sign in again.' };
       break;
   }

@@ -41,7 +41,7 @@ The remaining quantity is the ordered quantity minus net receipts. D1 rejects mo
 
 | Option | Access |
 | --- | --- |
-| User | Dashboard and account controls. Public registration begins here. |
+| User | Dashboard and account controls. Administrators create these accounts in Staff Accounts. |
 | Issue Kit | Issue uniform to cadets and view Cadets and Cadet Kit. |
 | Return Kit | Post and review returns to suppliers. |
 | Stores Demands | Raise and edit eligible purchase orders, receive deliveries and manage back orders. |
@@ -79,7 +79,7 @@ The diagram follows a successful sign-in. On page load, the browser can restore 
 
 ## Architecture and repository layout
 
-The source lives at the repository root. React 17 and Material UI 7 provide the interface. esbuild bundles scripts, styles, fonts and imported images into `build/` with content-hashed filenames. Wrangler deploys the Worker and the static assets together. Requests to `/api/*` reach the Worker first. Other paths use the asset binding and the single-page application fallback.
+The source lives at the repository root. React 19 and Material UI 7 provide the interface. esbuild bundles scripts, styles, fonts and imported images into `build/` with content-hashed filenames. Wrangler deploys the Worker and the static assets together. Requests to `/api/*` reach the Worker first. Other paths use the asset binding and the single-page application fallback.
 
 ### Request and data flow
 
@@ -135,7 +135,7 @@ A fresh database starts with no accounts. Open `/api/session` on the deployed Wo
 
 The stored format is `pbkdf2$100000$<salt>$<hash>`. Derive the 32-byte hash using PBKDF2-SHA256 with 100,000 iterations. Generate a random 32-byte salt and convert it to lowercase hex. Encode that hex salt as UTF-8 for PBKDF2, and store the digest in lowercase hex. See the [Worker password implementation](worker.js).
 
-Existing changed passwords survive redeployment. Sessions expire after 24 hours and use Secure, HttpOnly, SameSite cookies with hashed tokens in D1. Password changes and administrator actions such as username or role edits, resets and deactivation revoke affected sessions.
+Existing changed passwords survive redeployment. Sessions expire after 30 minutes of inactivity or 24 hours total. They use Secure, HttpOnly, SameSite browser-session cookies with hashed tokens in D1. Sign out when leaving a shared computer. Password changes and administrator actions such as username or role edits, resets and deactivation revoke affected sessions.
 
 ### Weekly and post-push deployment
 
@@ -180,7 +180,7 @@ Browser and home-screen icons use the bundled carton artwork. The ImageGen-produ
 
 Use Node.js 22.12 or later and npm 10.9.2 from the repository root. Regenerate the lockfile with that npm version when changing dependencies.
 
-Material UI uses Emotion for styling. `package.json` pins `react-is` to the React version so Material UI recognises React 17 elements correctly. Update those versions together.
+Material UI uses Emotion for styling.
 
 `npm run dev` provides a frontend-only preview at `127.0.0.1:5173`. Restart it after changing the HTML template or copied public assets. Use the deployed app for Worker and D1 workflows.
 
@@ -188,6 +188,12 @@ Material UI uses Emotion for styling. `package.json` pins `react-is` to the Reac
 - `npm audit --package-lock-only` checks dependency advisories without installing packages.
 - Cloudflare Workers Builds performs build verification. Use fresh records in the deployed browser to verify the real Worker, D1 and UI together.
 - Record source review, dependency audit, Cloudflare build and browser verification separately. See the [release checklist](TODO.md).
+
+### Administrator recovery and production checks
+
+Keep two verified administrators on each active database. If one loses access, the other can reset it in **Staff Accounts**. If both are locked out, an authorised D1 operator can use the local password reset helper to replace one account's hash, require a password change and revoke its sessions. Verify the database ID first, test the procedure on staging and deliver the temporary password privately. Review recent account and branding events under **Settings**.
+
+The build command runs the schema and API suite and an npm audit before bundling. GitHub Actions runs the same checks. Use the Node version in `.node-version` for both Workers Builds projects. See the [production follow-up checklist](TODO.md#production-security-review-follow-up).
 
 ## Development focus
 
@@ -197,7 +203,7 @@ Complete owner-led release verification first, including the Monday deployment a
 
 Send JSON for `POST` requests with an `Origin` that matches the request URL. Browser requests set this header automatically. Responses use Cache-Control: no-store.
 
-D1 stores hashed session tokens and rate-limit entries. Authentication and user or staff creation share a per-IP rate-limit bucket. Operational writes, branding, settings and individual user edits, resets and access changes use a separate bucket. The Worker removes expired rate-limit entries and sessions during normal requests.
+Sign-in failures are limited separately by username and network. IPv6 addresses are grouped by /64. Other write requests have a separate rate limit.
 
 ### Sessions and passwords
 
@@ -205,7 +211,7 @@ D1 stores hashed session tokens and rate-limit entries. Authentication and user 
 | --- | --- |
 | `GET /api/session` | Returns the session user, or `{ "user": null }` when signed out. |
 | `GET /api/operations/access` | Returns `canOperate: true` and the effective `permissions` array to a ready session with stores access. Returns `401` when signed out or `403` when access is unavailable. |
-| `POST /api/register` and `POST /api/login` | Send `username` and `password`. |
+| `POST /api/login` | Send `username` and `password`. |
 | `POST /api/change-password` | Send `currentPassword` and `newPassword`. The Worker revokes prior sessions and issues a fresh one. |
 | `POST /api/logout` | Ends the current session. |
 
@@ -225,7 +231,7 @@ These routes require an administrator who has completed any mandatory password c
 
 Use `user` or `admin` for `role`. Permission keys are `issue-kit`, `return-kit` and `stores-demands`. An administrator has all workflow permissions. Pass the returned `nextCursor` as `after` for the next page.
 
-Existing clients can use `/api/users` and its `users` envelope. Older `/api/staff` create requests that omit `permissions` grant all stores permissions, and `accountMode: "existing"` grants them to an account with none.
+Existing clients can use `/api/users` and its `users` envelope. Older `/api/staff` create requests that omit `permissions` grant all stores permissions, and existing logins need administrator-issued credentials before gaining privileges. Reset unverified credentials and hand the temporary password to the intended account holder before granting access.
 
 ### Registers and purchase orders
 
@@ -244,7 +250,7 @@ Use the corresponding permission for issues, supplier returns, or receipts and b
 - **Lists and details.** `GET /api/{receipts,back-orders,issues,supplier-returns,cadet-kit,inventory-stock}` supports search and `/ID` details. Back orders expose `/summary`. Stock details expose `/ID/sizes` and `/ID/movements`. Use `orderId` on receipt history or `cadetId` on issue history.
 - **Receiving.** `POST /api/receipts` accepts `orderId`, optional `backOrderId`, optional `notes` and lines with `orderLineId` and `quantity`.
 - **Issue and return.** `POST /api/issues` accepts `cadetId`. `POST /api/supplier-returns` accepts `supplierId`. Both accept optional `notes` and lines with `variantId` and `quantity`.
-- **Corrections.** Administrators send a `reason` to `POST /api/purchase-orders/ID/cancel` or `POST /api/{receipts,issues,supplier-returns,opening-balances}/ID/reverse`. `GET /api/opening-balances` lists previously posted opening balances for administrators.
+- **Corrections.** Administrators send a `reason` to `POST /api/purchase-orders/ID/cancel` or `POST /api/{receipts,issues,supplier-returns,opening-balances}/ID/reverse`. `GET /api/opening-balances` lists stock adjustments and historical opening balances for administrators. To post an adjustment, send `variantId`, signed whole-unit `quantity`, `reason` and an optional `requestId` to `POST /api/opening-balances`.
 
 For a purchase order create, receipt, issue or supplier return, retry the same data with the same `requestId` to recover the original reference. The author can also use `GET /api/posting-status/{purchase-orders,receipts,issues,supplier-returns}/REQUEST_ID` to check whether the write succeeded. The browser keeps only the pending request ID in the current tab while the outcome is uncertain.
 

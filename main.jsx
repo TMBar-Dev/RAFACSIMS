@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import ReactDOM from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import './App.css';
 import storesCover from './stores-cover.jpg';
 import '@fontsource/roboto/400.css';
@@ -53,6 +53,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [idleWarning, setIdleWarning] = useState(false);
   const [username, setUsername] = useState('');
   // Reused for sign-in and the current-password check; cleared after success.
   const [password, setPassword] = useState('');
@@ -175,13 +176,15 @@ function App() {
   // A tab left open can still display loaded data after server-side expiry.
   // Refresh on return to the tab and periodically while it remains visible.
   useEffect(() => {
+    setIdleWarning(false);
     if (!user) return;
     let active = true;
     async function checkSession() {
       if (document.visibilityState !== 'visible') return;
       try {
-        const { user: current } = await api('session');
+        const { user: current, idleExpiresAt } = await api('session');
         if (!active || activeUser.current !== user) return;
+        setIdleWarning(Boolean(current && idleExpiresAt && idleExpiresAt * 1000 - Date.now() <= 180000));
         if (!current && clearSession(user)) {
           setMessage('Your session ended. Please sign in again.');
         } else if (current && (current.username !== user.username || current.role !== user.role ||
@@ -221,11 +224,6 @@ function App() {
     });
   };
   // Registration creates an ordinary account; it does not sign the user in.
-  const register = () => perform(async () => {
-    const data = await api('register', { username, password });
-    setMessage(data.message);
-    setPassword('');
-  });
   const logout = () => perform(async () => {
     const startedWith = activeUser.current;
     // An already-ended session still has a successful, cookie-clearing logout.
@@ -268,7 +266,7 @@ function App() {
       case 'settings': return <SettingsPage request={api} onUpdated={update => setBranding(current => ({ ...current, ...update }))} />;
       case 'orders': return <PurchaseOrders key={hash} request={api} initialId={queryId(query, 'id')} canCorrect={canCorrect}
         postingOwner={postingOwner} />;
-      case 'stock': return <StockPage key={hash} request={api} query={query} canCorrect={canCorrect}
+      case 'stock': return <StockPage key={hash} request={api} query={query} canCorrect={canCorrect} postingOwner={postingOwner}
         canViewTransaction={key => canViewPage(PAGES[key], user, permissions)} />;
       case 'back-orders': return <BackOrders key={hash} request={api} query={query} />;
       case 'cadet-kit': return <CadetKit key={hash} request={api} query={query} />;
@@ -298,6 +296,7 @@ function App() {
           <Button color="inherit" disabled={busy} onClick={logout}>Log out</Button>
         </div>}
       </Toolbar></AppBar>
+      {user && idleWarning && <p className="message-banner screen-only" role="status">Your session will expire soon due to inactivity.</p>}
       <main className={showWorkspace ? 'workspace' : 'account-area'}>
         {showWorkspace ? (
           <div className="workspace-shell" key={user.username.toLowerCase()}>
@@ -330,12 +329,10 @@ function App() {
           ) : (
             <form onSubmit={login}>
               {systemName !== shortName && <Typography>{systemName}</Typography>}
-              <Typography variant="h5" component="h1">Sign in or register</Typography>
+              <Typography variant="h5" component="h1">Sign in</Typography>
               <TextField fullWidth required label="Username" autoComplete="username" value={username} slotProps={{ htmlInput: { maxLength: 40 } }} onChange={e => setUsername(e.target.value)} />
               <TextField fullWidth required label="Password" type="password" autoComplete="current-password" value={password} slotProps={{ htmlInput: { maxLength: 128 } }} onChange={e => setPassword(e.target.value)} />
               <Button type="submit" variant="contained" color="primary" disabled={busy}>Sign in</Button>
-              <Button type="button" disabled={busy} onClick={register}>Register</Button>
-              <p>New accounts require a password of at least 6 characters.</p>
             </form>
           )}
           {message && <p role="status" aria-live="polite">{message}</p>}
@@ -347,9 +344,8 @@ function App() {
 }
 
 // Insert Emotion styles first so App.css can continue overriding MUI defaults.
-ReactDOM.render(
+createRoot(document.getElementById('root')).render(
   <StyledEngineProvider injectFirst>
     <ThemeProvider theme={theme}><App /></ThemeProvider>
-  </StyledEngineProvider>,
-  document.getElementById('root')
+  </StyledEngineProvider>
 );

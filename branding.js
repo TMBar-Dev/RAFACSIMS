@@ -1,4 +1,4 @@
-import { LIVE_ADMIN } from './account-admin.js';
+import { LIVE_ADMIN, auditedChange, securityEvent } from './account-admin.js';
 import { fail, text } from './management.js';
 
 export const BRANDING_SCHEMA = [
@@ -100,10 +100,10 @@ export async function saveBranding(db, actor, body) {
   const name = text(body.name, 'System name', 100, true);
   const shortName = text(body.shortName, 'Short name', 32, true);
   const about = text(body.aboutUs ?? '', 'About Us', 2000);
-  const row = await db.prepare(`INSERT INTO branding_settings (id, name, short_name, about_us)
+  const row = await auditedChange(db, db.prepare(`INSERT INTO branding_settings (id, name, short_name, about_us)
     SELECT 1, ?, ?, ? WHERE ${LIVE_ADMIN}
     ON CONFLICT(id) DO UPDATE SET name = excluded.name, short_name = excluded.short_name, about_us = excluded.about_us
-    RETURNING id`).bind(name, shortName, about, actor.token_hash).first();
+    RETURNING id`).bind(name, shortName, about, actor.token_hash), actor.id, null, 'branding.settings');
   if (!row) fail('Your administrator session changed. Sign in again.', 403);
   return { name, shortName, aboutUs: about };
 }
@@ -197,11 +197,11 @@ export async function saveBrandingImage(db, actor, slot, body) {
   if (body.restore === true) {
     const revision = typeof body.revision === 'string' && /^[a-f0-9-]{36}$/i.test(body.revision) ? body.revision : null;
     if (!revision) fail('Choose a saved image revision.');
-    const saved = await db.prepare(`UPDATE branding_images SET
+    const saved = await auditedChange(db, db.prepare(`UPDATE branding_images SET
       (media_type, content, revision) = (SELECT media_type, content, revision FROM branding_image_history
         WHERE slot = ? AND revision = ?)
       WHERE slot = ? AND EXISTS (SELECT 1 FROM branding_image_history WHERE slot = ? AND revision = ?)
-        AND ${LIVE_ADMIN} RETURNING revision`).bind(slot, revision, slot, slot, revision, actor.token_hash).first();
+        AND ${LIVE_ADMIN} RETURNING revision`).bind(slot, revision, slot, slot, revision, actor.token_hash), actor.id, null, 'branding.restore-image', slot);
     if (!saved) fail('The previous image or your administrator session is unavailable.', 409);
     return { [`${slot}Url`]: imageUrl(slot, saved.revision), [`${slot}FallbackUrl`]: null };
   }
@@ -210,7 +210,7 @@ export async function saveBrandingImage(db, actor, slot, body) {
   // Archive the previous bytes in the same transaction. If an uploaded
   // image passes format checks but fails to render, a previous revision is
   // still available to browsers and administrators.
-  const [, result, , fallback] = await db.batch([
+  const [, result, , , fallback] = await db.batch([
     db.prepare(`INSERT INTO branding_image_history (slot, media_type, content, revision)
       SELECT slot, media_type, content, revision FROM branding_images WHERE slot = ? AND ${LIVE_ADMIN}
       ON CONFLICT(slot, revision) DO NOTHING`).bind(slot, actor.token_hash),
@@ -218,6 +218,7 @@ export async function saveBrandingImage(db, actor, slot, body) {
       SELECT ?, ?, ?, ? WHERE ${LIVE_ADMIN}
       ON CONFLICT(slot) DO UPDATE SET media_type = excluded.media_type, content = excluded.content,
         revision = excluded.revision RETURNING slot`).bind(slot, type, body.content, revision, actor.token_hash),
+    securityEvent(db, actor.id, null, 'branding.upload-image', slot),
     db.prepare(`DELETE FROM branding_image_history WHERE slot = ? AND id NOT IN (
       SELECT id FROM branding_image_history WHERE slot = ? ORDER BY id DESC LIMIT 3)
       AND EXISTS (SELECT 1 FROM branding_images WHERE slot = ? AND revision = ?)`).bind(slot, slot, slot, revision),
@@ -239,7 +240,7 @@ export async function serveBrandingImage(db, slot, revision = null) {
       'Content-Type': image.media_type,
       'X-Content-Type-Options': 'nosniff',
       'Content-Security-Policy': "default-src 'none'; sandbox",
-      'Cache-Control': 'no-store'
+      'Cache-Control': revision ? 'public, max-age=86400, immutable' : 'no-store'
     }
   });
 }

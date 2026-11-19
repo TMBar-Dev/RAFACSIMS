@@ -14,7 +14,7 @@ if (relative(root, outdir) !== 'build') throw new Error('Invalid build directory
 await rm(outdir, { recursive: true, force: true });
 await mkdir(outdir, { recursive: true });
 // Copy only public files. The Worker, sources and configuration stay private.
-for (const asset of ['favicon.ico', 'apple-touch-icon.png', 'app-icon-192.png', 'app-icon-512.png', 'manifest.json', 'robots.txt']) {
+for (const asset of ['favicon.ico', 'apple-touch-icon.png', 'app-icon-192.png', 'app-icon-512.png', 'manifest.json', 'robots.txt', '_headers']) {
   await cp(resolve(root, asset), resolve(outdir, asset));
 }
 
@@ -32,7 +32,7 @@ const options = {
   platform: 'browser',
   format: 'esm',
   target: ['chrome111', 'edge111', 'firefox114', 'safari16.4'],
-  jsx: 'transform',
+  jsx: 'automatic',
   // React and Material UI select development/production behavior using this value.
   define: { 'process.env.NODE_ENV': JSON.stringify(development ? 'development' : 'production') },
   minify: !development,

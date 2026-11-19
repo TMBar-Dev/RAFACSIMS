@@ -71,5 +71,9 @@ export const INVENTORY_SCHEMA = [
         WHERE l.id = NEW.order_line_id AND l.variant_id = NEW.variant_id AND l.order_id = t.order_id
           AND l.received + NEW.quantity_delta BETWEEN 0 AND l.quantity
       ) THEN RAISE(ABORT, 'receipt quantity exceeds order balance') END;
-    END`
+    END`,
+  // Corrections append opposing movements. Historical entries are never edited.
+  ...['stock_movements', 'inventory_transactions'].flatMap(table => ['UPDATE', 'DELETE'].map(action =>
+    `CREATE TRIGGER IF NOT EXISTS ${table}_no_${action.toLowerCase()} BEFORE ${action} ON ${table}
+      BEGIN SELECT RAISE(ABORT, 'inventory ledger is append-only'); END`))
 ];

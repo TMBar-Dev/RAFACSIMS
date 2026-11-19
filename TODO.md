@@ -55,3 +55,12 @@ Use one test size starting at zero stock so changes can be checked against the l
 2. **Make production support repeatable.** Document how to identify the deployed commit, detect failed builds or Worker errors, roll back code and recover D1. Exercise recovery in a separate database and check account access, open order quantities and stock totals afterwards.
 3. **Plan future dependency upgrades separately.** Audit the lockfile and address actionable advisories. Assess supported React and Material UI versions and check layout, dialogs, controls and printing against the release baseline.
 4. **Confirm demand before adding workflows.** Find out which recurring tasks stores staff cannot complete. Cadet handbacks, current holdings and CSV exchange need explicit requirements. Legacy migration remains outside this release.
+
+## Production security review follow-up
+
+- [ ] Verify both Worker builds and the deployed browser flows on a staging Worker with a separate D1 database. Check the idle timeout, CSP and printing, stock adjustments and reversals, audit output and branding cache.
+- [ ] Require the GitHub Verify check and a review on `main`. Verify that both Cloudflare projects use the pinned Node version and gated build command. Confirm Monday rebuilds use the intended branch.
+- [ ] Configure Cloudflare edge limits for sign-in and public branding, plus alerts for failed deployments, elevated 5xx and 429 rates, and CPU errors. Confirm the Worker plan and inspect password hashing metrics.
+- [ ] Confirm two named administrators on each active database, review existing accounts and coordinate password resets with their owners. Rehearse D1 recovery on staging.
+- [ ] Agree with the squadron and wing on cadet-data ownership, privacy notices, authorised access, retention, event retention and D1 location and recovery policies. Design anonymisation to cover historical names and free-text remarks while preserving stock records, then agree on backup handling before enabling erasure.
+- [ ] Inventory historical references before retiring the unused legacy stock and order tables. Move the remaining schema definitions to explicit D1 migrations after testing both existing databases. Check non-ASCII duplicate handling and frontend accessibility in staging.

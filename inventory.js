@@ -1,10 +1,11 @@
+import { ISSUE_KIT, RETURN_KIT, STORES_DEMANDS, hasPermission } from './account-permissions.js';
 import { constraintError, fail, integer, MAX_LINES, MAX_QUANTITY, pageRows, queryPage, text } from './management.js';
 
 const KINDS = { receipts: 'receipt', issues: 'issue', 'supplier-returns': 'return', 'opening-balances': 'opening' };
 const PAGE_LIMIT = 26;
 
 export function inventoryRoute(path) {
-  const status = /^\/api\/posting-status\/(purchase-orders|receipts|issues|supplier-returns)\/([a-z0-9-]{16,64})$/i.exec(path);
+  const status = /^\/api\/posting-status\/(purchase-orders|receipts|issues|supplier-returns|opening-balances)\/([a-z0-9-]{16,64})$/i.exec(path);
   if (status) return { resource: 'posting-status', workflow: status[1].toLowerCase(), detail: status[2] };
   const cancellation = /^\/api\/purchase-orders\/(\d+)\/cancel$/.exec(path);
   if (cancellation) return { resource: 'purchase-orders', detail: cancellation[1], action: 'cancel' };
@@ -29,7 +30,7 @@ async function readTransactions(db, kind, id, url) {
   if (id) {
     const [header, lines] = await db.batch([
       db.prepare(`SELECT ${TRANSACTION_COLUMNS} ${TRANSACTION_TABLES} WHERE t.id = ? AND t.kind = ?`).bind(id, kind),
-      db.prepare(`SELECT id, variant_id, item_name, size, abs(quantity_delta) AS quantity
+      db.prepare(`SELECT id, variant_id, item_name, size, abs(quantity_delta) AS quantity, quantity_delta
         FROM stock_movements WHERE transaction_id = ? ORDER BY id`).bind(id)
     ]);
     if (!header.results[0]) fail('Transaction not found.', 404);
@@ -77,7 +78,7 @@ async function readBackOrders(db, detail, url) {
   return pageRows(result.results);
 }
 
-async function readStock(db, id, action, url) {
+async function readStock(db, id, action, url, user) {
   const { after, search } = queryPage(url);
   if (action === 'sizes') {
     const result = await db.prepare(`SELECT v.id, v.size, v.status,
@@ -94,8 +95,12 @@ async function readStock(db, id, action, url) {
       JOIN inventory_transactions t ON t.id = m.transaction_id
       LEFT JOIN inventory_transactions original ON original.id = t.original_id
       WHERE v.item_id = ? AND (? IS NULL OR m.id < ?)
+      AND (? OR (coalesce(original.kind, t.kind) = 'issue' AND ?)
+        OR (coalesce(original.kind, t.kind) = 'return' AND ?)
+        OR (coalesce(original.kind, t.kind) = 'receipt' AND ?))
       AND instr(lower(t.code || ' ' || m.size || ' ' || t.actor_name), lower(?)) > 0
-      ORDER BY m.id DESC LIMIT ?`).bind(id, after, after, search, PAGE_LIMIT).all();
+      ORDER BY m.id DESC LIMIT ?`).bind(id, after, after, Number(user.role === 'admin'), Number(hasPermission(user, ISSUE_KIT)),
+      Number(hasPermission(user, RETURN_KIT)), Number(hasPermission(user, STORES_DEMANDS)), search, PAGE_LIMIT).all();
     return pageRows(result.results);
   }
   const result = await db.prepare(`SELECT i.id, i.name, i.description, i.uniform_type, i.status, s.name AS supplier_name,
@@ -148,7 +153,7 @@ export function readInventory(db, { resource, detail, action, workflow }, url, u
   if (resource === 'posting-status') return readPostingStatus(db, workflow, detail, user.id);
   if (resource === 'back-orders') return readBackOrders(db, detail, url);
   const id = detail ? integer(Number(detail), 'Record ID') : null;
-  if (resource === 'inventory-stock') return readStock(db, id, action, url);
+  if (resource === 'inventory-stock') return readStock(db, id, action, url, user);
   if (resource === 'cadet-kit') return readCadetKit(db, id, url);
   return readTransactions(db, KINDS[resource], id, url);
 }
@@ -267,6 +272,25 @@ async function postOutbound(db, kind, body, user) {
   return postingResult(db, identity, [header, movements], issue ? 'Choose an active cadet.' : 'Choose an active supplier.');
 }
 
+async function postStockAdjustment(db, body, user) {
+  const variant = integer(body.variantId, 'Item size');
+  const quantity = body.quantity;
+  if (!Number.isSafeInteger(quantity) || quantity === 0 || Math.abs(quantity) > MAX_QUANTITY)
+    fail('Enter a non-zero whole quantity within the stock adjustment limit.');
+  const reason = text(body.reason, 'Reason', 1000, true);
+  const identity = await requestIdentity(body, user, 'opening', [variant, quantity, reason]);
+  const header = db.prepare(`INSERT INTO inventory_transactions
+      (kind, party_name, actor_id, actor_name, notes, request_key, request_fingerprint, write_token)
+    VALUES ('opening', 'Stock adjustment', ?, ?, ?, ?, ?, ?) ${HEADER_TAIL}`)
+    .bind(user.id, user.username, reason, identity.key, identity.fingerprint, identity.token);
+  const movement = db.prepare(`INSERT INTO stock_movements (transaction_id, variant_id, item_name, size, quantity_delta)
+    SELECT t.id, v.id, i.name, v.size, ? FROM inventory_transactions t
+    LEFT JOIN catalog_variants v ON v.id = ? AND v.status = 'active'
+    LEFT JOIN catalog_items i ON i.id = v.item_id AND i.status = 'active'
+    WHERE t.write_token = ?`).bind(quantity, variant, identity.token);
+  return postingResult(db, identity, [header, movement], 'This adjustment could not be posted.');
+}
+
 async function reverseTransaction(db, kind, id, body, user) {
   const reason = text(body.reason, 'Reversal reason', 1000, true);
   const identity = await requestIdentity(body, user, 'reversal', [kind, id, reason]);
@@ -303,6 +327,7 @@ export function writeInventory(db, { resource, detail, action }, body, user) {
   const id = detail ? integer(Number(detail), 'Record ID') : null;
   if (action === 'cancel') return cancelOrder(db, id, body, user);
   if (action === 'reverse') return reverseTransaction(db, KINDS[resource], id, body, user);
+  if (!id && resource === 'opening-balances') return postStockAdjustment(db, body, user);
   if (!id && resource === 'receipts') return postReceipt(db, body, user);
   if (!id && ['issues', 'supplier-returns'].includes(resource)) return postOutbound(db, KINDS[resource], body, user);
   fail('Method not allowed.', 405);

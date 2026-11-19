@@ -166,6 +166,8 @@ export default function SettingsPage({ request, onUpdated }) {
   const [revision, setRevision] = useState(0);
   const result = useResource(request, 'settings', revision);
   const settings = result?.data;
+  const [showEvents, setShowEvents] = useState(false);
+  const events = useResource(request, showEvents ? 'security-events' : null, revision);
   return (
     <>
       <header className="page-heading"><Typography component="h1" variant="h4">Settings</Typography></header>
@@ -181,6 +183,25 @@ export default function SettingsPage({ request, onUpdated }) {
             onUpdated={onUpdated} />)}
         </div>
       </>}
+      <Card className="workspace-card" variant="outlined">
+        <Typography component="h2" variant="h6">Recent security events</Typography>
+        <Button type="button" onClick={() => setShowEvents(visible => !visible)}>
+          {showEvents ? 'Hide events' : 'Show events'}
+        </Button>
+        {showEvents && <Button type="button" onClick={() => setRevision(value => value + 1)}>Refresh events</Button>}
+        {showEvents && !events && <p role="status">Loading events...</p>}
+        {showEvents && events?.error && <p role="alert">{events.error}</p>}
+        {showEvents && events?.data && <div className="table-scroll">
+          <table className="records-table">
+            <caption>Up to 50 recent security events</caption>
+            <thead><tr><th scope="col">Time</th><th scope="col">Action</th><th scope="col">Actor ID</th><th scope="col">Target ID</th></tr></thead>
+            <tbody>{events.data.events.map(event => <tr key={event.id}>
+              <td>{new Date(event.created_at * 1000).toLocaleString('en-GB')}</td>
+              <td>{event.action}</td><td>{event.actor_id ?? '-'}</td><td>{event.target_id ?? '-'}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
+      </Card>
     </>
   );
 }

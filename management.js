@@ -8,7 +8,7 @@ export const MAX_QUANTITY = 1_000_000;
 
 export function text(value, label, max, required = false) {
   if (typeof value !== 'string') fail(`${label} must be text.`);
-  if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(value))
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\p{Cf}]/u.test(value))
     fail(`${label} contains unsupported control characters.`);
   const trimmed = value.trim().normalize('NFC');
   if (trimmed.length > max || (required && !trimmed))

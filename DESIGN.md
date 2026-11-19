@@ -20,7 +20,7 @@ PO means purchase order and BO means back order. Reference paths in these tables
 
 | Screen | CAT SIMS behaviour | V1 reference |
 | --- | --- | --- |
-| Sign-in and My Account | Supports username and password sign-in, public registration, session restoration, logout and password changes. Administrator-created or reset accounts must replace the temporary password at next sign-in. | `classes/Login.php` |
+| Sign-in and My Account | Supports username and password sign-in, session restoration, logout and password changes. Administrator-created or reset accounts must replace the temporary password at next sign-in. | `classes/Login.php` |
 | Dashboard | Links users with Stores Demands to outstanding POs and BOs. A partial PO with an open BO counts in both totals. Navigation follows account permissions. The signed-in dashboard displays About Us. | `admin/home.php` |
 | Staff Accounts | Administrators manage all logins by username, role and stores permissions, set temporary passwords, and deactivate or reactivate access. Historical actor references retain their account IDs. | `admin/user` |
 
@@ -31,7 +31,7 @@ PO means purchase order and BO means back order. Reference paths in these tables
 | Orders | Each printable order has one supplier, item and size lines, whole-unit quantities, remarks and a stable `PO-` reference. Staff and administrators can edit pending orders until the first receipt. Administrators can cancel an eligible order with a reason. | `admin/purchase_order` |
 | Receiving | Post deliveries from PO or BO details. Search or print receipts showing supplier, actor, reference, quantities and remarks. Administrators correct receipts through a reversal. | `admin/receiving` |
 | Back Orders | A partial delivery opens one BO per PO. Its reference is reused for later deliveries. The printable detail shows ordered, received and remaining quantities, with links to receipt history and receiving. | `admin/back_order` |
-| Stock Management | Shows availability by item and size and links indexed movements to transaction history. Administrators can review and reverse previously posted opening balances. | `admin/stocks/index.php` |
+| Stock Management | Shows availability by item and size and links indexed movements to transaction history. Administrators can post and reverse stock adjustments, including opening stock. | `admin/stocks/index.php` |
 | Issue Uniform | Select an active cadet and available sizes, post multiple lines and print the issue. History preserves the recipient name at posting. | `admin/sales` |
 | Supplier Returns | Select an active supplier and available sizes for its items. A posted return decreases stock and retains the actor, remarks and printable reference. | `admin/return` |
 | Cadet Kit | Shows issue history, including reversed references. Totals count unreversed issues, lines and units separately. Cadets with historical issues remain searchable after leaving. | `admin/Issued_Cadet/index.php` |
@@ -51,9 +51,9 @@ Register and transaction lists use search and cursor pagination with stable ID o
 | --- | --- |
 | Administrator | All stores workflows and registers, plus account management, branding, cancellations, reversals and review of existing opening balances. |
 | User with workflow permissions | Issue Kit enables cadet lookup, issues and Cadet Kit. Return Kit enables supplier returns. Stores Demands enables purchase orders, receipts and back orders. Any workflow permission grants read access to Stock Management. |
-| User without workflow permissions | Account controls and the basic dashboard with About Us. Public registration alone grants no operational access. |
+| User without workflow permissions | Account controls and the basic dashboard with About Us. Administrators create accounts through Staff Accounts. |
 | Awaiting a mandatory password change | Password change and sign-out. Stores access starts once the password is replaced. |
-| Signed out | Sign-in, public registration and public branding. |
+| Signed out | Sign-in and public branding. |
 | Deactivated account | Sign-in is blocked until another administrator reactivates the account. Historical references stay attached to the original account. |
 
 - **Live access checks.** The Worker checks the session, current role and required workflow permission on protected requests. Navigation reflects the same permissions.

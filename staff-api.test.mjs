@@ -127,7 +127,9 @@ test('Staff Accounts and operational workflows', async t => {
   await t.test('ordinary users and cross-origin requests cannot create staff logins', async () => {
     assert.equal((await request('register', {
       body: { username: 'ordinary', password: 'OrdinaryPass!123', role: 'admin', permissions: ALL_PERMISSIONS }
-    })).status, 201);
+    })).status, 410);
+    assert.equal((await request('users', { cookie: adminCookie, body: { username: 'ordinary', password: 'OrdinaryPass!123', role: 'user' } })).status, 201);
+    DB.database.prepare("UPDATE staff SET must_change_password = 0 WHERE username = 'ordinary'").run();
     const ordinary = await request('login', { body: { username: 'ordinary', password: 'OrdinaryPass!123' } });
     assert.equal((await request('staff', { cookie: ordinary.cookie })).status, 403);
     assert.equal((await request('staff', { cookie: ordinary.cookie, body: credentials })).status, 403);
@@ -176,6 +178,15 @@ test('Staff Accounts and operational workflows', async t => {
     assert.equal((await request('login', { body: { username: 'existing.login', password: 'ExistingLogin!123' } })).status, 200);
     assert.equal((await request('staff', { cookie: adminCookie, body })).status, 409);
     assert.equal((await request('staff', { cookie: adminCookie, body: { ...body, username: 'missing.account' } })).status, 404);
+  });
+
+  await t.test('requires administrator-issued credentials before an existing login can gain access', async () => {
+    const fixture = DB.database.prepare("SELECT id FROM staff WHERE username = 'ordinary'").get();
+    DB.database.prepare('DELETE FROM staff_verified_credentials WHERE user_id = ?').run(fixture.id);
+    const path = `staff/${fixture.id}/edit`;
+    const body = { username: 'ordinary', previousUsername: 'ordinary', role: 'admin', previousRole: 'user' };
+    assert.equal((await request(path, { cookie: adminCookie, body })).status, 409);
+    assert.equal((await request('staff', { cookie: adminCookie, body: { accountMode: 'existing', username: 'ordinary' } })).status, 409);
   });
 
   await t.test('operational access follows live roles and permissions without replacing sessions', async () => {
@@ -535,6 +546,13 @@ test('Staff Accounts and operational workflows', async t => {
     assert.equal((await request(`supplier-returns/${returned.data.id}/reverse`, { ...admin, body: { reason: 'Return withdrawn' } })).status, 201);
     assert.deepEqual(await sizes(), [5, 4]);
     const movements = (await request(`inventory-stock/${item}/movements`, staff)).data.records;
+    const restricted = await request('login', { body: { username: 'Return-only', password: 'PermissionChanged!456' } });
+    const returnAccess = await request(`inventory-stock/${item}/movements`, { cookie: restricted.cookie });
+    assert.equal(returnAccess.status, 200);
+    assert.ok(returnAccess.data.records.length);
+    assert.ok(returnAccess.data.records.every(row => ['return', 'reversal'].includes(row.kind)));
+    assert.ok(!returnAccess.data.records.some(row => row.original_code === issue.data.code));
+    assert.throws(() => DB.database.prepare('UPDATE stock_movements SET quantity_delta = 500').run(), /append-only/);
     assert.ok(movements.some(row => row.kind === 'reversal' && row.original_code));
 
     const extra = await request('purchase-orders', { ...staff, body: { supplierId: supplier, lines: [{ variantId: small.id, quantity: 1 }] } });
@@ -550,7 +568,7 @@ test('Staff Accounts and operational workflows', async t => {
 
     assert.equal((await request('opening-balances', staff)).status, 403);
     const { id: legacyId } = DB.database.prepare("SELECT id FROM stock WHERE reference = 'V1-STOCK'").get();
-    assert.equal((await request('opening-balances', { ...admin, body: { legacyId, variantId: small.id } })).status, 405);
+    assert.equal((await request('opening-balances', { ...admin, body: { legacyId, variantId: small.id } })).status, 400);
     const old = DB.database.prepare(`INSERT INTO inventory_transactions
       (kind, legacy_stock_id, party_name, actor_name, request_key, request_fingerprint, write_token)
       VALUES ('opening', ?, 'V1-STOCK', 'admin', 'existing-opening', 'fixture', 'existing-opening-write') RETURNING id`).get(legacyId);
@@ -570,5 +588,15 @@ test('Staff Accounts and operational workflows', async t => {
     assert.deepEqual(await sizes(), [3, 3]);
     assert.equal((await readKit()).unit_count, 3);
     assert.equal((await readKit()).line_count, 2);
+    const adjustment = { variantId: small.id, quantity: -2, reason: 'Stock count correction', requestId: 'review-adjustment-fixture' };
+    assert.equal((await request('opening-balances', { ...staff, body: adjustment })).status, 403);
+    const adjusted = await request('opening-balances', { ...admin, body: adjustment });
+    assert.equal(adjusted.status, 201);
+    assert.deepEqual(await request('opening-balances', { ...admin, body: adjustment }), adjusted);
+    assert.deepEqual((await request('posting-status/opening-balances/review-adjustment-fixture', admin)).data, adjusted.data);
+    assert.deepEqual(await sizes(), [1, 3]);
+    assert.equal((await request('opening-balances', { ...admin, body: { ...adjustment, quantity: -2, requestId: 'new-adjustment-fixture' } })).status, 409);
+    assert.equal((await request(`opening-balances/${adjusted.data.id}/reverse`, { ...admin, body: { reason: 'Undo count correction' } })).status, 201);
+    assert.deepEqual(await sizes(), [3, 3]);
   });
 });

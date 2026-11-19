@@ -60,8 +60,8 @@ test('User Management, settings and account regressions', async t => {
   const { default: worker } = await import(`./worker.js?api-test=${Date.now()}`);
   const origin = 'https://rafacsims.example';
   let requestNumber = 0;
-  function fetchApi(path, { body, cookie, requestOrigin = origin } = {}) {
-    const headers = { 'CF-Connecting-IP': `192.0.2.${++requestNumber}` };
+  function fetchApi(path, { body, cookie, requestOrigin = origin, ip } = {}) {
+    const headers = { 'CF-Connecting-IP': ip ?? `192.0.2.${++requestNumber}` };
     if (cookie) headers.Cookie = cookie;
     if (body !== undefined) Object.assign(headers, { Origin: requestOrigin, 'Content-Type': 'application/json' });
     return worker.fetch(new Request(`${origin}/api/${path}`, {
@@ -106,7 +106,9 @@ test('User Management, settings and account regressions', async t => {
 
   await t.test('ordinary registration cannot grant administrator permissions', async () => {
     const registered = await request('register', { body: { username: 'ordinary', password: 'U4sW!9', role: 'admin' } });
-    assert.equal(registered.status, 201);
+    assert.equal(registered.status, 410);
+    assert.equal((await request('users', { cookie: adminCookie, body: { username: 'ordinary', password: 'U4sW!9', role: 'user' } })).status, 201);
+    DB.database.prepare("UPDATE staff SET must_change_password = 0 WHERE username = 'ordinary'").run();
     const login = await request('login', { body: { username: 'ordinary', password: 'U4sW!9' } });
     assert.equal(login.status, 200);
     assert.equal(login.data.user.role, 'user');
@@ -114,6 +116,28 @@ test('User Management, settings and account regressions', async t => {
     assert.equal((await request('users', { cookie: login.cookie, body: account })).status, 403);
     assert.equal((await request('users', { cookie: adminCookie, body: account, requestOrigin: 'https://other.example' })).status, 403);
     assert.equal(DB.database.prepare('SELECT count(*) AS total FROM staff').get().total, 2);
+  });
+
+  await t.test('separates account and network sign-in limits on shared connections', async () => {
+    const body = { username: 'rate-limit-fixture', password: 'incorrect' };
+    for (let host = 1; host <= 8; host++) {
+      assert.equal((await request('login', { body, ip: `2001:db8:aaaa:1::${host}` })).status, 401);
+    }
+    assert.equal((await request('login', { body, ip: '198.51.100.5' })).status, 429);
+    assert.equal((await request('login', { body: { username: 'admin', password: 'ChangedAdmin!123' },
+      ip: '2001:db8:aaaa:1::20' })).status, 200);
+    const network = DB.database.prepare('SELECT hits FROM rate_limits WHERE hits = 8').all();
+    assert.equal(network.length, 2);
+  });
+
+  await t.test('expires idle sessions without treating polling as activity', async () => {
+    const login = await request('login', { body: { username: 'admin', password: 'ChangedAdmin!123' } });
+    const token = login.cookie.split('=')[1];
+    const hash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))).toString('hex');
+    DB.database.prepare('UPDATE session_activity SET last_active = unixepoch() - 1740 WHERE token_hash = ?').run(hash);
+    assert.equal((await request('session', { cookie: login.cookie })).data.user.username, 'admin');
+    DB.database.prepare('UPDATE session_activity SET last_active = last_active - 120 WHERE token_hash = ?').run(hash);
+    assert.equal((await request('session', { cookie: login.cookie })).data.user, null);
   });
 
   await t.test('bounds ordinary JSON requests by actual bytes even without Content-Length', async () => {
@@ -215,9 +239,13 @@ test('User Management, settings and account regressions', async t => {
     assert.equal((await request('login', { body: { username: edit.username, password: temporary } })).status, 401);
     const listed = (await request('staff', admin)).data.staff.find(row => row.id === target.id);
     assert.equal(listed.account.active, false);
+    assert.equal((await request('security-events', { cookie: renamed.cookie })).status, 401);
     assert.equal(listed.account.id, target.id);
     assert.deepEqual(listed.account.permissions, ['issue-kit', 'return-kit', 'stores-demands']);
     assert.equal((await request(`${userPath}/reactivate`, { ...admin, body: {} })).status, 200);
+    const historyEvents = (await request('security-events', admin)).data.events.filter(event => event.target_id === target.id);
+    for (const action of ['account.edit', 'account.reset-password', 'account.deactivate', 'account.reactivate'])
+      assert.ok(historyEvents.some(event => event.action === action));
     assert.equal((await request('session', { cookie: reset.cookie })).data.user, null);
     const enabled = await request('login', { body: { username: edit.username, password: temporary } });
     assert.equal(enabled.data.user.mustChangePassword, true);

@@ -3,6 +3,7 @@
   "name": "rafacsims",
   // Backend entry point, bundled separately from the browser application.
   "main": "./worker.js",
+  "observability": { "enabled": true },
   "compatibility_date": "2026-11-17",
   "assets": {
     // Only generated public files are hosted; never change this to ".".

@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Button, Card, Typography } from '@mui/material';
-import { useResource } from './management-ui.jsx';
+import { Button, Card, TextField, Typography } from '@mui/material';
+import { RecordPicker, useResource } from './management-ui.jsx';
 import {
-  CorrectionForm, DataTable, formatDate, InventoryHeading, InventoryLink, InventoryList, PrintRecord, queryId
+  CorrectionForm, DataTable, formatDate, InventoryHeading, InventoryLink, InventoryList, PendingPosting, PrintRecord, queryId, usePosting
 } from './inventory-ui.jsx';
 
 const details = (result, label) => !result ? <p role="status">Loading {label}…</p>
@@ -55,7 +55,42 @@ export function BackOrders({ request, query }) {
   );
 }
 
-function OpeningHistory({ request, balanceId }) {
+function StockAdjustment({ request, postingOwner }) {
+  const [variant, setVariant] = useState(null);
+  const [quantity, setQuantity] = useState('');
+  const [reason, setReason] = useState('');
+  const posting = usePosting(request, { owner: postingOwner, workflow: 'opening-balances' });
+  const saved = ({ id }) => { window.location.hash = '#/stock?opening=1&balanceId=' + id; };
+  return (
+    <Card className="workspace-card" variant="outlined">
+      <Typography component="h2" variant="h6">Post stock adjustment</Typography>
+      <PendingPosting posting={posting} onSave={saved} />
+      <form onSubmit={event => {
+        event.preventDefault();
+        posting.post('opening-balances', { variantId: variant.id, quantity: Number(quantity), reason }, saved);
+      }}>
+        <fieldset className="record-fieldset" disabled={posting.saving}>
+          <RecordPicker request={request} label="Item size" endpoint="variants?active=1" value={variant}
+            onChange={setVariant} format={row => [row.item_name, row.size].filter(Boolean).join(' / ')} />
+          <div className="record-tools">
+            <TextField required type="number" label="Quantity change" value={quantity}
+              onChange={event => setQuantity(event.target.value)}
+              slotProps={{ htmlInput: { min: -1000000, max: 1000000, step: 1 } }}
+              helperText="Use a positive value to add stock or a negative value to remove it." />
+            <TextField required label="Reason" value={reason} onChange={event => setReason(event.target.value)}
+              slotProps={{ htmlInput: { maxLength: 1000 } }} />
+          </div>
+          <Button type="submit" color="primary" variant="contained" disabled={!variant || !Number(quantity) || !reason.trim()}>
+            Post adjustment
+          </Button>
+        </fieldset>
+      </form>
+      {posting.error && <p role="alert" className="error-message">{posting.error}</p>}
+    </Card>
+  );
+}
+
+function OpeningHistory({ request, balanceId, postingOwner }) {
   const [revision, setRevision] = useState(0);
   const [correcting, setCorrecting] = useState(false);
   const endpoint = balanceId ? 'opening-balances/' + balanceId : null;
@@ -63,13 +98,14 @@ function OpeningHistory({ request, balanceId }) {
   const record = result?.data?.record;
   return (
     <>
+      <StockAdjustment request={request} postingOwner={postingOwner} />
       {balanceId && (record ? (
         <Card className="workspace-card" variant="outlined">
           <Typography component="h2" variant="h6">Opening balance {record.code}</Typography>
           <p>{record.party_name} ? {record.actor_name} ? {formatDate(record.created_at)}</p>
           {record.notes && <p>{record.notes}</p>}
           <DataTable label="Opening balance lines" rows={record.lines}
-            columns={[["Item", 'item_name'], ["Size", 'size'], ["Quantity", 'quantity']]} />
+            columns={[["Item", 'item_name'], ["Size", 'size'], ["Quantity change", 'quantity_delta']]} />
           {record.reversal_code ? <p>Reversed by {record.reversed_by} ? {record.reversal_code} ? {record.reversal_reason}</p>
             : <Button type="button" color="secondary" onClick={() => setCorrecting(true)}>Reverse opening balance</Button>}
         </Card>
@@ -77,7 +113,7 @@ function OpeningHistory({ request, balanceId }) {
       {correcting && record && !record.reversal_code && <CorrectionForm request={request}
         endpoint={endpoint + '/reverse'} label="Reverse opening balance" onClose={() => setCorrecting(false)}
         onSave={() => { setCorrecting(false); setRevision(value => value + 1); }} />}
-      <InventoryList key={revision} request={request} endpoint="opening-balances" title="Opening balance history" columns={[
+      <InventoryList key={revision} request={request} endpoint="opening-balances" title="Stock adjustment history" columns={[
         ['Reference', 'code'], ['Source stock', 'party_name'], ['Units', 'unit_count'],
         ['Status', row => row.reversal_code ? 'Reversed' : 'Posted'],
         ['Details', row => <InventoryLink page="stock" query={{ opening: 1, balanceId: row.id }}>View {row.code}</InventoryLink>]
@@ -91,16 +127,16 @@ const movementKinds = {
   opening: ['Opening balance'], reversal: ['Reversal']
 };
 
-export function StockPage({ request, query, canCorrect, canViewTransaction }) {
+export function StockPage({ request, query, canCorrect, canViewTransaction, postingOwner }) {
   const id = queryId(query, 'id');
   const result = useResource(request, id ? `inventory-stock/${id}` : null);
   const record = result?.data?.record;
   return (
     <>
       <InventoryHeading title="Stock Management">
-        {canCorrect && <InventoryLink page="stock" query={{ opening: 1 }}>Opening balance history</InventoryLink>}
+        {canCorrect && <InventoryLink page="stock" query={{ opening: 1 }}>Stock adjustments</InventoryLink>}
       </InventoryHeading>
-      {canCorrect && query.get('opening') === '1' && <OpeningHistory request={request} balanceId={queryId(query, 'balanceId')} />}
+      {canCorrect && query.get('opening') === '1' && <OpeningHistory request={request} postingOwner={postingOwner} balanceId={queryId(query, 'balanceId')} />}
       {id && (record ? <>
         <Card className="workspace-card" variant="outlined">
           <div className="section-heading">
