@@ -18,5 +18,13 @@
     "binding": "DB",
     "database_name": "rafacsims",
     "database_id": "18a4aabd-eeb5-489f-8969-b46393408e5a"
-  }]
+  }],
+  // Branch Previews use a separate database for test accounts and stock.
+  "previews": {
+    "d1_databases": [{
+      "binding": "DB",
+      "database_name": "rafacsims-preview",
+      "database_id": "cd2192cd-ed73-4425-916d-8764ba502011"
+    }]
+  }
 }
