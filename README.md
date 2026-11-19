@@ -146,7 +146,7 @@ Existing changed passwords survive redeployment. Sessions expire after 30 minute
 ### Weekly and post-push deployment
 
 - **Weekly rebuild.** Set Monday at 03:00 UTC under **Trigger Events** on the existing Worker. Keep cron out of `wrangler.jsonc` so the dashboard owns the schedule. The handler uses the runtime secret `CLOUDFLARE_DEPLOY_HOOK_URL` to rebuild `main`, including weeks with no new commits. The local hook value is kept in the ignored `Documentation/Local/.env.cloudflare-nightly-deploy-hook` file.
-- **After an approved push.** Use the separate hook in the ignored `Documentation/Local/.env.cloudflare-deploy-hook` file. Follow the approval and reporting steps in [AGENTS.md](AGENTS.md).
+- **After an approved push.** Use the branch-specific hook in the ignored `Documentation/Local/` folder. Pushes to `main` use `.env.cloudflare-deploy-hook`. Pushes to `preview` use `.env.cloudflare-preview-deploy-hook`. Follow the approval and reporting steps in [AGENTS.md](AGENTS.md).
 
 A queued build confirms Cloudflare accepted the request. For a scheduled run, match the build ID in Workers Logs to the result in Workers Builds. Both hooks build the configured branch. A code defect still needs a fix or rollback.
 

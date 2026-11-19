@@ -24,8 +24,8 @@
 
 ## After a successful push
 
-1. After an approved push to `origin/main`, confirm the remote tip and read its latest commit message.
-2. Read and trim the hook URL from the ignored `Documentation/Local/.env.cloudflare-deploy-hook` file in memory. Keep the URL out of tracked files, logs and responses.
+1. After an approved push to `origin/main` or `origin/preview`, confirm the remote tip of that branch and read its latest commit message.
+2. For `main`, use `Documentation/Local/.env.cloudflare-deploy-hook`. For `preview`, use `Documentation/Local/.env.cloudflare-preview-deploy-hook`. Read and trim the chosen URL in memory. Keep hook URLs out of tracked files, logs and responses.
 3. Send a bodyless HTTP `POST` to the Cloudflare Workers Builds hook.
 4. Report the commit message and hook result. Include the build ID and status when Cloudflare returns them.
 
