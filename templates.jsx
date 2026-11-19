@@ -88,43 +88,61 @@ export function visiblePages(user, canOperate) {
   return Object.entries(PAGES).filter(([, page]) => canViewPage(page, user, canOperate));
 }
 
+const navigationGroups = [
+  ['Purchasing', ['orders', 'receipts', 'back-orders']],
+  ['Stock and cadets', ['stock', 'issues', 'supplier-returns', 'cadets', 'cadet-kit']],
+  ['Administration', ['suppliers', 'catalog', 'staff', 'users', 'settings']]
+];
+
+export function WorkspaceNavigation({ page, user, canOperate }) {
+  const available = new Set(visiblePages(user, canOperate).map(([key]) => key));
+  const link = key => (
+    <a key={key} href={pageHref(key)} aria-current={page === key ? 'page' : undefined}>{PAGES[key].title}</a>
+  );
+  return (
+    <aside className="workspace-sidebar">
+      <nav aria-label="Main navigation">
+        {link('dashboard')}
+        {navigationGroups.map(([title, keys]) => {
+          const links = keys.filter(key => available.has(key));
+          if (!links.length) return null;
+          const selected = links.includes(page);
+          return (
+            <details key={title} open={selected}>
+              <summary className={selected ? 'current-group' : undefined}>{title}</summary>
+              <div className="workspace-nav-links">{links.map(link)}</div>
+            </details>
+          );
+        })}
+      </nav>
+    </aside>
+  );
+}
+
 export function Dashboard({ user, canOperate, request }) {
-  const modules = visiblePages(user, canOperate).filter(([key]) => key !== 'dashboard');
   const about = useResource(request, 'about')?.data?.aboutUs;
   return (
     <>
       <header className="page-heading">
-        <p className="eyebrow">Squadron workspace</p>
-        <Typography variant="h4" component="h1">Welcome, {user.username}</Typography>
-        {modules.length > 0 && <p>Choose an area below to open your workspace.</p>}
+        <Typography variant="h4" component="h1">Dashboard</Typography>
+        <p>{user.username} · {user.role === 'admin' ? 'Administrator' : canOperate ? 'Staff' : 'Member'}</p>
       </header>
       {canOperate && <div className="inventory-summary">
         <PurchaseOrderSummary request={request} />
         <BackOrderSummary request={request} />
       </div>}
-      {modules.length > 0 && <div className="module-grid">
-        {modules.map(([key, page]) => (
-          <Card key={key} className="module-card" variant="outlined">
-            <Typography variant="h6" component="h2">{page.title}</Typography>
-            <p>{page.description}</p>
-            <Button component="a" href={pageHref(key)} variant="contained" color="primary">
-              Open {page.title}
-            </Button>
-          </Card>
-        ))}
-      </div>}
-      {about && <Card className="workspace-card" variant="outlined">
-        <Typography variant="h6" component="h2">About Us</Typography>
-        <p className="about-copy">{about}</p>
+      {canOperate && <Card className="workspace-card" variant="outlined">
+        <Typography variant="h6" component="h2">Quick actions</Typography>
+        <div className="dashboard-actions">
+          <Button component="a" href="#/issues?create=1" variant="contained" color="primary">Issue uniform</Button>
+          <Button component="a" href={pageHref('stock')} variant="outlined" color="primary">Check stock</Button>
+          <Button component="a" href={pageHref('cadet-kit')} variant="outlined" color="primary">View cadet kit</Button>
+        </div>
       </Card>}
-      <Card className="workspace-card" variant="outlined">
-        <Typography variant="h6" component="h2">Your account</Typography>
-        <dl className="account-details">
-          <div><dt>Username</dt><dd>{user.username}</dd></div>
-          <div><dt>Role</dt><dd>{user.role === 'admin' ? 'Administrator' : 'Member'}</dd></div>
-        </dl>
-        <p>Use the account controls at the top to change your password or sign out.</p>
-      </Card>
+      {about && <details className="dashboard-about">
+        <summary>About Us</summary>
+        <p className="about-copy">{about}</p>
+      </details>}
     </>
   );
 }

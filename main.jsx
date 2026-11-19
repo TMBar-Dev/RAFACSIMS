@@ -6,7 +6,7 @@ import '@fontsource/roboto/400.css';
 import '@fontsource/roboto/500.css';
 import { AppBar, Toolbar, Button, Card, TextField, Typography } from '@material-ui/core';
 import { createMuiTheme, ThemeProvider } from '@material-ui/core/styles';
-import { Dashboard, PAGES, canViewPage, pageHref, readPageHash, visiblePages } from './templates.jsx';
+import { Dashboard, PAGES, WorkspaceNavigation, canViewPage, pageHref, readPageHash } from './templates.jsx';
 import UserManagement from './users.jsx';
 import StaffAccounts from './staff.jsx';
 import RegisterPage from './registers.jsx';
@@ -281,16 +281,7 @@ function App() {
       <main className={showWorkspace ? 'workspace' : 'account-area'}>
         {showWorkspace ? (
           <div className="workspace-shell" key={user.username.toLowerCase()}>
-            <aside className="workspace-sidebar">
-              <p className="eyebrow">Workspace</p>
-              <nav aria-label="Main navigation">
-                {visiblePages(user, canOperate).map(([key, item]) => (
-                  <a key={key} href={pageHref(key)} aria-current={page === key ? 'page' : undefined}>
-                    {item.title}
-                  </a>
-                ))}
-              </nav>
-            </aside>
+            <WorkspaceNavigation page={page} user={user} canOperate={canOperate} />
             <section className="workspace-content" aria-label="Page content">
               {message && <p className="message-banner" role="status" aria-live="polite">{message}</p>}
               {access?.error && <p className="error-message" role="alert">Workspace access check failed. {access.error}</p>}
