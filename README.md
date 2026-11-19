@@ -4,8 +4,8 @@ RAFACSIMS, called CAT SIMS in the design documents, is a squadron stores applica
 
 The project rebuilds the workflows of the SIS V1 PHP/MySQL reference as a React application backed by Cloudflare Workers and D1. The local `V1/` copy and its SQL exports informed the design and are excluded from Git and deployment. This release starts with fresh operational records. Legacy migration, CSV exchange, cadet handbacks and current holdings are outside its scope.
 
-- [Design and business rules](DESIGN.md)
-- [Release checklist and development priorities](TODO.md)
+- [Design and business rules](Documentation/DESIGN.md)
+- [Release checklist and development priorities](Documentation/TODO.md)
 - [Repository and post-push requirements](AGENTS.md)
 
 Jump to [stores workflows](#stores-workflows), [request and data flow](#request-and-data-flow), [Cloudflare deployment](#cloudflare-deployment), [development and verification](#development-and-verification) or the [API reference](#api).
@@ -35,7 +35,7 @@ flowchart TD
     Ledger -->|Net receipts by order line| Remaining
 ```
 
-The remaining quantity is the ordered quantity minus net receipts. D1 rejects movements that would make a size balance negative or take net receipts outside the ordered quantity. The same batch updates the purchase order when a receipt is posted or reversed. A partial receipt creates one back order per purchase order. Subsequent receipts use that same reference. See the [worked stock example](DESIGN.md#worked-example-for-one-uniform-size).
+The remaining quantity is the ordered quantity minus net receipts. D1 rejects movements that would make a size balance negative or take net receipts outside the ordered quantity. The same batch updates the purchase order when a receipt is posted or reversed. A partial receipt creates one back order per purchase order. Subsequent receipts use that same reference. See the [worked stock example](Documentation/DESIGN.md#worked-example-for-one-uniform-size).
 
 ### Account access
 
@@ -79,7 +79,7 @@ The diagram follows a successful sign-in. On page load, the browser can restore 
 
 ## Architecture and repository layout
 
-The source lives at the repository root. React 19 and Material UI 7 provide the interface. esbuild bundles scripts, styles, fonts and imported images into `build/` with content-hashed filenames. Wrangler deploys the Worker and the static assets together. Requests to `/api/*` reach the Worker first. Other paths use the asset binding and the single-page application fallback.
+The source is grouped by purpose. Build tooling and both Wrangler entry configurations live at the repository root. React 19 and Material UI 7 provide the interface. esbuild bundles scripts, styles, fonts and imported images into `build/` with content-hashed filenames. Wrangler deploys the Worker and the static assets together. Requests to `/api/*` reach the Worker first. Other paths use the asset binding and the single-page application fallback.
 
 ### Request and data flow
 
@@ -88,7 +88,7 @@ flowchart TD
     Browser["Browser running the React app"]
     Browser -->|Page and asset requests| Assets["Cloudflare static assets: build/"]
     Assets -->|HTML, scripts, styles and images| Browser
-    Browser -->|Same-origin API requests| Worker["Cloudflare Worker: worker.js"]
+    Browser -->|Same-origin API requests| Worker["Cloudflare Worker: Backend/worker.js"]
     Worker -->|JSON responses or branding images| Browser
     Worker -->|Queries and writes via DB binding| Database[("D1: accounts, registers, orders, stock and branding")]
     Database -->|Records and query results| Worker
@@ -96,13 +96,13 @@ flowchart TD
 
 ### Source files
 
-| Area | Files |
+| Location | Contents |
 | --- | --- |
-| Browser entry, styles and navigation | `index.html`, `main.jsx`, `App.css`, `templates.jsx` |
-| Registers and orders | `registers.jsx`, `purchase-orders.jsx`, `management-ui.jsx`, `management.js`, `schema.js` |
-| Inventory and ledger | `inventory-transactions.jsx`, `inventory-pages.jsx`, `inventory-ui.jsx`, `inventory.js`, `inventory-schema.js` |
-| Accounts and branding | `staff.jsx`, `staff-schema.js`, `settings.jsx`, `account-admin.js`, `account-permissions.js`, `branding.js` |
-| Authentication and deployment | `worker.js`, `wrangler.jsonc`, `build.mjs`, `package.json`, `package-lock.json` |
+| [Frontend/](Frontend/) | Browser entry, React pages, CSS, HTML template and browser assets |
+| [Backend/](Backend/) | Worker entry, API handlers, D1 schemas and backend tests |
+| [Cloudflare/](Cloudflare/) | Static asset headers |
+| [Documentation/](Documentation/) | Design, release checklist and script notes |
+| Repository root | README, project instructions, build script, npm manifests and Wrangler configs |
 
 The Worker initializes missing tables on API access. D1 stores accounts in `staff` with a username, password hash, role and permissions. Keep the existing `DB` binding and D1 database ID to preserve accounts and operational records. Stock availability comes from posted movements. Database constraints and batched writes protect stock and order remainders. Request IDs support recovery when a posting response is interrupted.
 
@@ -117,11 +117,11 @@ The Worker initializes missing tables on API access. D1 stores accounts in `staf
 | Deploy command for the second account | `npx wrangler deploy --config wrangler.other.jsonc` |
 | Worker and D1 database name | `rafacsims` |
 
-Set the Workers Builds root to the repository root. Clear the former `client/` setting if it is still present. Both Wrangler configs set the asset binding, so omit a separate `--assets` argument.
+Set the Workers Builds root to the repository root. Both Wrangler configs point to `Backend/worker.js`, and the deployment continues to publish `build/`. Clear the former `client/` setting if it is still present. Both Wrangler configs set the asset binding, so omit a separate `--assets` argument.
 
 Each Cloudflare account has its own D1 database. `wrangler.jsonc` points to the original database. `wrangler.other.jsonc` points to the second account's database. Both expose the binding as `DB`. Set the second Worker's deploy command explicitly so Wrangler selects its database. The deploy identity needs access to the Worker and its configured D1 database.
 
-**Public files.** The build copies the favicon, Apple touch icon, two app icons, manifest and robots file alongside the bundled app. The `build/` binding keeps repository files, SQL exports, secrets and `V1/` outside the public asset directory.
+**Public files.** The build copies the favicon, Apple touch icon, two app icons, manifest and robots file from `Frontend/`, and the `_headers` file from `Cloudflare/`, alongside the bundled app. The `build/` binding keeps repository files, SQL exports, secrets and `V1/` outside the public asset directory.
 
 ### Updating an existing database
 
@@ -133,14 +133,14 @@ Record a D1 recovery point before deploying to an existing database. A Worker ve
 
 A fresh database starts with no accounts. Open `/api/session` on the deployed Worker to initialise its tables, then provision the first administrator through D1. Insert a username, a password hash, `role = 'admin'` and `must_change_password = 1` into `staff`. Sign in with that account and replace the temporary password. Additional accounts can be created in **Staff Accounts**.
 
-The stored format is `pbkdf2$100000$<salt>$<hash>`. Derive the 32-byte hash using PBKDF2-SHA256 with 100,000 iterations. Generate a random 32-byte salt and convert it to lowercase hex. Encode that hex salt as UTF-8 for PBKDF2, and store the digest in lowercase hex. See the [Worker password implementation](worker.js).
+The stored format is `pbkdf2$100000$<salt>$<hash>`. Derive the 32-byte hash using PBKDF2-SHA256 with 100,000 iterations. Generate a random 32-byte salt and convert it to lowercase hex. Encode that hex salt as UTF-8 for PBKDF2, and store the digest in lowercase hex. See the [Worker password implementation](Backend/worker.js).
 
 Existing changed passwords survive redeployment. Sessions expire after 30 minutes of inactivity or 24 hours total. They use Secure, HttpOnly, SameSite browser-session cookies with hashed tokens in D1. Sign out when leaving a shared computer. Password changes and administrator actions such as username or role edits, resets and deactivation revoke affected sessions.
 
 ### Weekly and post-push deployment
 
-- **Weekly rebuild.** Set Monday at 03:00 UTC under **Trigger Events** on the existing Worker. Keep cron out of `wrangler.jsonc` so the dashboard owns the schedule. The handler uses the runtime secret `CLOUDFLARE_DEPLOY_HOOK_URL` to rebuild `main`, including weeks with no new commits. The local hook value is kept in the ignored `.env.cloudflare-nightly-deploy-hook` file.
-- **After an approved push.** Use the separate hook in the ignored `.env.cloudflare-deploy-hook` file. Follow the approval and reporting steps in [AGENTS.md](AGENTS.md).
+- **Weekly rebuild.** Set Monday at 03:00 UTC under **Trigger Events** on the existing Worker. Keep cron out of `wrangler.jsonc` so the dashboard owns the schedule. The handler uses the runtime secret `CLOUDFLARE_DEPLOY_HOOK_URL` to rebuild `main`, including weeks with no new commits. The local hook value is kept in the ignored `Documentation/Local/.env.cloudflare-nightly-deploy-hook` file.
+- **After an approved push.** Use the separate hook in the ignored `Documentation/Local/.env.cloudflare-deploy-hook` file. Follow the approval and reporting steps in [AGENTS.md](AGENTS.md).
 
 A queued build confirms Cloudflare accepted the request. For a scheduled run, match the build ID in Workers Logs to the result in Workers Builds. Both hooks build the configured branch. A code defect still needs a fix or rollback.
 
@@ -184,20 +184,20 @@ Material UI uses Emotion for styling.
 
 `npm run dev` provides a frontend-only preview at `127.0.0.1:5173`. Restart it after changing the HTML template or copied public assets. Use the deployed app for Worker and D1 workflows.
 
-- `npm test` runs the Node.js SQLite-backed schema and API tests without writing to live D1. If the shell blocks child processes, use `node --test --test-isolation=none *.test.mjs` on Node 24.
+- `npm test` runs the Node.js SQLite-backed schema and API tests without writing to live D1. If the shell blocks child processes, use `node --test --test-isolation=none Backend/*.test.mjs` on Node 24.
 - `npm audit --package-lock-only` checks dependency advisories without installing packages.
 - Cloudflare Workers Builds performs build verification. Use fresh records in the deployed browser to verify the real Worker, D1 and UI together.
-- Record source review, dependency audit, Cloudflare build and browser verification separately. See the [release checklist](TODO.md).
+- Record source review, dependency audit, Cloudflare build and browser verification separately. See the [release checklist](Documentation/TODO.md).
 
 ### Administrator recovery and production checks
 
-Keep two verified administrators on each active database. If one loses access, the other can reset it in **Staff Accounts**. If both are locked out, an authorised D1 operator can use the local password reset helper to replace one account's hash, require a password change and revoke its sessions. Verify the database ID first, test the procedure on staging and deliver the temporary password privately. Review recent account and branding events under **Settings**.
+Keep two verified administrators on each active database. If one loses access, the other can reset it in **Staff Accounts**. If both are locked out, an authorised D1 operator can use the [password reset helper](Documentation/Scripts/Reset-RafacSimsPassword.ps1) to replace one account's hash, require a password change and revoke its sessions. Verify the database ID first, test the procedure on staging and deliver the temporary password privately. Review recent account and branding events under **Settings**.
 
-The build command runs the schema and API suite and an npm audit before bundling. GitHub Actions runs the same checks. Use the Node version in `.node-version` for both Workers Builds projects. See the [production follow-up checklist](TODO.md#production-security-review-follow-up).
+The build command runs the schema and API suite and an npm audit before bundling. GitHub Actions runs the same checks. Use the Node version in `.node-version` for both Workers Builds projects. See the [production follow-up checklist](Documentation/TODO.md#production-security-review-follow-up).
 
 ## Development focus
 
-Complete owner-led release verification first, including the Monday deployment and a full stores workflow through stock correction. Use pilot feedback to prioritize navigation, forms, interrupted saves and printing. Document D1 recovery and monitoring, then plan the next React and Material UI upgrades separately from feature work. See the [prioritized backlog](TODO.md#development-after-release-verification).
+Complete owner-led release verification first, including the Monday deployment and a full stores workflow through stock correction. Use pilot feedback to prioritize navigation, forms, interrupted saves and printing. Document D1 recovery and monitoring, then plan the next React and Material UI upgrades separately from feature work. See the [prioritized backlog](Documentation/TODO.md#development-after-release-verification).
 
 ## API
 

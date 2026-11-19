@@ -4,7 +4,7 @@
 
 - Preserve existing functionality unless the user explicitly requests a behaviour change.
 - Review every changed or moved file against the previous Git version. Check imports, assets, API contracts, authentication, database bindings and build paths.
-- Keep frontend and backend source in the single top-level layout. Publish only `build/` and explicitly allowed static assets. Never expose the repository root as a static directory.
+- Keep browser source in `Frontend/`, Worker source in `Backend/`, and local-only tools and secrets in the ignored `Documentation/Local/` folder. Publish only `build/` and explicitly allowed static assets. Never expose the repository root as a static directory.
 - Preserve the existing D1 database ID, account passwords and session behaviour when making unrelated changes.
 
 ## Explain non-obvious code
@@ -25,7 +25,7 @@
 ## After a successful push
 
 1. After an approved push to `origin/main`, confirm the remote tip and read its latest commit message.
-2. Read and trim the hook URL from the ignored `.env.cloudflare-deploy-hook` file in memory. Keep the URL out of tracked files, logs and responses.
+2. Read and trim the hook URL from the ignored `Documentation/Local/.env.cloudflare-deploy-hook` file in memory. Keep the URL out of tracked files, logs and responses.
 3. Send a bodyless HTTP `POST` to the Cloudflare Workers Builds hook.
 4. Report the commit message and hook result. Include the build ID and status when Cloudflare returns them.
 

@@ -12,9 +12,9 @@ Use fresh test records. Legacy import and reconciliation are outside this releas
 - [ ] Request known source, SQL export and `V1/` paths and check the response contents. A missing path may return the app shell because of the single-page application fallback. The private file contents must stay inaccessible.
 - [ ] Confirm the Monday 03:00 UTC trigger and scheduled hook secret on the existing Worker. Match the scheduled build ID in Workers Logs to its deployment result in Workers Builds.
 
-For a fresh database, [provision the first administrator in D1](README.md#first-sign-in) before testing sign-in.
+For a fresh database, [provision the first administrator in D1](../README.md#first-sign-in) before testing sign-in.
 
-For an existing database, record a D1 recovery point before the deployment and verify the migrated `staff` accounts, sessions and workflow permissions. See the [migration notes](README.md#updating-an-existing-database).
+For an existing database, record a D1 recovery point before the deployment and verify the migrated `staff` accounts, sessions and workflow permissions. See the [migration notes](../README.md#updating-an-existing-database).
 
 ### Sign-in, access and registers
 
@@ -47,7 +47,7 @@ Use one test size starting at zero stock so changes can be checked against the l
 ### Record the results
 
 - [ ] Record the date, deployed commit and outcomes. Report the source review, dependency audit, Cloudflare build and deployed browser checks separately.
-- [ ] If fixes are needed, review the changed files, rerun affected isolated tests and obtain approval for each additional push. See [AGENTS.md](AGENTS.md).
+- [ ] If fixes are needed, review the changed files, rerun affected isolated tests and obtain approval for each additional push. See [AGENTS.md](../AGENTS.md).
 
 ## Development after release verification
 

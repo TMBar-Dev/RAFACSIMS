@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 // cannot redirect the build cleanup or change where assets are read.
 const root = dirname(fileURLToPath(import.meta.url));
 const outdir = resolve(root, 'build');
+const entryPoint = 'Frontend/main.jsx';
 const development = process.argv.includes('--dev');
 
 // Restrict cleanup to the fixed output directory next to this script.
@@ -14,9 +15,11 @@ if (relative(root, outdir) !== 'build') throw new Error('Invalid build directory
 await rm(outdir, { recursive: true, force: true });
 await mkdir(outdir, { recursive: true });
 // Copy only public files. The Worker, sources and configuration stay private.
-for (const asset of ['favicon.ico', 'apple-touch-icon.png', 'app-icon-192.png', 'app-icon-512.png', 'manifest.json', 'robots.txt', '_headers']) {
-  await cp(resolve(root, asset), resolve(outdir, asset));
+for (const asset of ['favicon.ico', 'apple-touch-icon.png', 'app-icon-192.png', 'app-icon-512.png', 'manifest.json', 'robots.txt']) {
+  await cp(resolve(root, 'Frontend', asset), resolve(outdir, asset));
 }
+
+await cp(resolve(root, 'Cloudflare', '_headers'), resolve(outdir, '_headers'));
 
 function assetUrl(path) {
   // esbuild's metadata paths are relative to root. Published URLs are relative
@@ -26,7 +29,7 @@ function assetUrl(path) {
 
 const options = {
   absWorkingDir: root,
-  entryPoints: ['main.jsx'],
+  entryPoints: [entryPoint],
   outdir,
   bundle: true,
   platform: 'browser',
@@ -52,9 +55,9 @@ const options = {
         // Read generated filenames instead of guessing hashes or hard-coding
         // bundle names. Imported CSS is emitted separately and linked here.
         const entry = Object.entries(result.metafile.outputs)
-          .find(([path, info]) => path.endsWith('.js') && info.entryPoint === 'main.jsx');
+          .find(([path, info]) => path.endsWith('.js') && info.entryPoint && resolve(root, info.entryPoint) === resolve(root, entryPoint));
         if (!entry || !entry[1].cssBundle) throw new Error('Missing application JavaScript or CSS bundle.');
-        const template = await readFile(resolve(root, 'index.html'), 'utf8');
+        const template = await readFile(resolve(root, 'Frontend', 'index.html'), 'utf8');
         const html = template
           .replace('<!-- APP_STYLES -->', `<link rel="stylesheet" href="${assetUrl(entry[1].cssBundle)}" />`)
           .replace('<!-- APP_SCRIPT -->', `<script type="module" src="${assetUrl(entry[0])}"></script>`);

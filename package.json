@@ -11,7 +11,7 @@
     "start": "node build.mjs --dev",
     "dev": "node build.mjs --dev",
     "build": "npm test && npm audit --audit-level=high && node build.mjs",
-    "test": "node --test *.test.mjs"
+    "test": "node --test Backend/*.test.mjs"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",

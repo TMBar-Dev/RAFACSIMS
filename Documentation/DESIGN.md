@@ -88,13 +88,13 @@ The reversed issue remains visible in Cadet Kit history. Its two units are remov
 
 | Storage | Relationships and responsibilities |
 | --- | --- |
-| `staff`, `sessions`, `account_deactivations` | `staff` stores credentials, role and the three stores permission flags. Account IDs remain stable during migration. Deactivation records block sign-in and revoke sessions without removing attribution. See [account administration](account-admin.js). |
-| `cadets`, `suppliers`, `catalog_items`, `catalog_variants` | The registers supply operational choices. Catalog items belong to suppliers and variants belong to catalog items. Active statuses filter new choices. See [management schema](schema.js). |
+| `staff`, `sessions`, `account_deactivations` | `staff` stores credentials, role and the three stores permission flags. Account IDs remain stable during migration. Deactivation records block sign-in and revoke sessions without removing attribution. See [account administration](../Backend/account-admin.js). |
+| `cadets`, `suppliers`, `catalog_items`, `catalog_variants` | The registers supply operational choices. Catalog items belong to suppliers and variants belong to catalog items. Active statuses filter new choices. See [management schema](../Backend/schema.js). |
 | `purchase_orders`, `purchase_order_lines`, `purchase_order_cancellations`, `back_orders` | The order holds supplier and status. Lines hold stable variant references and ordered quantities. The BO has one reference per originating PO. Cancellations preserve the actor, reason and original order. |
-| `inventory_transactions`, `stock_movements` | A header records a receipt, issue, supplier return, opening balance or reversal. Each ledger row links a variant to a signed movement and the original PO line where applicable. Views derive size availability and purchase-line remainders. See [inventory schema](inventory-schema.js). |
-| `branding_settings`, `branding_images` | System names, About Us and two bounded image slots use the existing D1 binding. Saved image revisions support recovery after a faulty upload. See the [branding implementation](branding.js) and [upload limits](README.md#branding). |
+| `inventory_transactions`, `stock_movements` | A header records a receipt, issue, supplier return, opening balance or reversal. Each ledger row links a variant to a signed movement and the original PO line where applicable. Views derive size availability and purchase-line remainders. See [inventory schema](../Backend/inventory-schema.js). |
+| `branding_settings`, `branding_images` | System names, About Us and two bounded image slots use the existing D1 binding. Saved image revisions support recovery after a faulty upload. See the [branding implementation](../Backend/branding.js) and [upload limits](../README.md#branding). |
 
-Legacy deployments migrate with transactional table renames before handling API requests. The old staff profile table is archived so historical links remain valid. The account table keeps its IDs and becomes `staff`. Existing staff links become all three workflow permissions. See the [migration and rollback notes](README.md#updating-an-existing-database).
+Legacy deployments migrate with transactional table renames before handling API requests. The old staff profile table is archived so historical links remain valid. The account table keeps its IDs and becomes `staff`. Existing staff links become all three workflow permissions. See the [migration and rollback notes](../README.md#updating-an-existing-database).
 
 ### Why the safeguards exist
 
@@ -103,7 +103,7 @@ Legacy deployments migrate with transactional table renames before handling API 
 - **Catch stale edits.** Register and purchase-order edits include the version read by the editor. The API rejects a stale version so it cannot overwrite a newer save.
 - **Limit public access.** Metadata and image slots are public for the sign-in screen. About Us requires sign-in and completion of any mandatory password change. Fresh databases require an explicitly provisioned administrator account.
 
-The Worker accepts same-origin JSON writes with bounded bodies and serves bounded list pages. See the [API reference](README.md#api).
+The Worker accepts same-origin JSON writes with bounded bodies and serves bounded list pages. See the [API reference](../README.md#api).
 
 ## V1 differences and scope decisions
 
@@ -133,6 +133,6 @@ Deployment retains the existing D1 binding and publishes `build/` with the expli
 
 ## Deployment and development implications
 
-The existing Worker handles the Monday 03:00 UTC scheduled event. Cloudflare Trigger Events manages the schedule. The handler calls Workers Builds using a runtime secret and records the acknowledged build ID. Deployment and browser verification remain separate checks. See the [deployment configuration](README.md#weekly-and-post-push-deployment).
+The existing Worker handles the Monday 03:00 UTC scheduled event. Cloudflare Trigger Events manages the schedule. The handler calls Workers Builds using a runtime secret and records the acknowledged build ID. Deployment and browser verification remain separate checks. See the [deployment configuration](../README.md#weekly-and-post-push-deployment).
 
 Verify the full order, receipt, issue and reversal sequence on the deployed Worker and D1. Use the first stores pilot to identify workflow improvements, including recovery after interrupted saves. Exercise D1 recovery separately and check that the procedure preserves account access, order remainders and the stock ledger. Keep dependency upgrades separate so navigation, dialogs and printing can be verified against the same baseline. See the [development backlog](TODO.md#development-after-release-verification).

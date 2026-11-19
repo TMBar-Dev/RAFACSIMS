@@ -14,3 +14,6 @@ coverage/
 .eslintcache
 .DS_Store
 *.log
+
+# Machine-local scripts and deployment settings.
+/Documentation/Local/
