@@ -49,9 +49,10 @@ function BrandingText({ request, settings, onUpdated }) {
   );
 }
 
-function BrandingImage({ request, slot, initialUrl, onUpdated }) {
+function BrandingImage({ request, slot, initialUrl, initialFallback, onUpdated }) {
   const { label, maxKiB, dimension } = imageOptions[slot];
   const [url, setUrl] = useState(initialUrl);
+  const [fallback, setFallback] = useState(initialFallback);
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [checking, setChecking] = useState(false);
@@ -73,6 +74,17 @@ function BrandingImage({ request, slot, initialUrl, onUpdated }) {
     return () => URL.revokeObjectURL(objectUrl);
   }, [file]);
   const selectedPreview = file && preview?.file === file ? preview.url : null;
+
+  function complete(data) {
+    const key = `${slot}Url`;
+    const fallbackKey = `${slot}FallbackUrl`;
+    setUrl(data[key]);
+    setFallback(data[fallbackKey]);
+    onUpdated({ [key]: data[key], [fallbackKey]: data[fallbackKey] });
+    setFile(null);
+    setInputVersion(version => version + 1);
+    setNotice(`${label} saved.`);
+  }
 
   function select(event) {
     const selected = event.target.files[0];
@@ -109,14 +121,7 @@ function BrandingImage({ request, slot, initialUrl, onUpdated }) {
       let binary = '';
       for (let offset = 0; offset < bytes.length; offset += 8192)
         binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
-      await post(`branding/${slot}`, { content: btoa(binary) }, data => {
-        const key = `${slot}Url`;
-        setUrl(data[key]);
-        onUpdated({ [key]: data[key] });
-        setFile(null);
-        setInputVersion(version => version + 1);
-        setNotice(`${label} saved.`);
-      });
+      await post(`branding/${slot}`, { content: btoa(binary) }, complete);
     } catch {
       if (mounted.current) setValidation('This image could not be decoded. Choose another PNG or JPEG.');
     } finally {
@@ -141,6 +146,12 @@ function BrandingImage({ request, slot, initialUrl, onUpdated }) {
           <Button type="submit" color="primary" variant="contained" disabled={!selectedPreview || busy}>
             {busy ? 'Saving…' : `Save ${label.toLowerCase()}`}
           </Button>
+          {fallback && <Button type="button" disabled={busy} onClick={() => {
+            setNotice('');
+            setValidation('');
+            const revision = new URL(fallback, window.location.origin).searchParams.get('v');
+            post(`branding/${slot}`, { restore: true, revision }, complete);
+          }}>Restore previous {label.toLowerCase()}</Button>}
         </fieldset>
         {notice && <p role="status">{notice}</p>}
         {!notice && (validation || error) && <p className="error-message" role="alert">{validation || error}</p>}
@@ -164,7 +175,8 @@ export default function SettingsPage({ request, onUpdated }) {
         <BrandingText request={request} settings={settings} onUpdated={onUpdated} />
         <div className="inventory-summary">
           {Object.keys(imageOptions).map(slot => <BrandingImage key={slot} slot={slot}
-            request={request} initialUrl={settings[`${slot}Url`]} onUpdated={onUpdated} />)}
+            request={request} initialUrl={settings[`${slot}Url`]} initialFallback={settings[`${slot}FallbackUrl`]}
+            onUpdated={onUpdated} />)}
         </div>
       </>}
     </>

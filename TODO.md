@@ -6,7 +6,7 @@ Phases 1–6 are implemented and pushed through commit `0f9a805`. The isolated s
 
 Owner decision. Skip legacy import and data reconciliation. Use fresh test records for the release checks. `V1/` stays local and ignored.
 
-- [ ] Confirm the Cloudflare build and deployment for `0f9a805`. Verify the existing D1 binding, the `build/` asset path and that direct requests cannot retrieve source files, SQL exports or `V1/`.
+- [ ] Confirm the Cloudflare build and the deployed commit. Verify the existing D1 binding, the `build/` asset path and that direct requests cannot retrieve source files, SQL exports or `V1/`. If provisioning a fresh D1 database, configure the administrator bootstrap secret before first sign-in.
 - [ ] In the deployed browser, check sign-in and page access as an administrator, linked staff member, unlinked user and account awaiting a mandatory password change. Verify direct links as well as navigation.
 - [ ] As an administrator, create a test cadet, supplier and sized item. Verify register search and edits and confirm inactive options disappear from new transaction pickers.
 - [ ] Order 10 units, receive 6 and receive the remaining 4 against the same back order. Check both dashboard counts, receipt history, the stock size balance and purchase-order, back-order and receipt printing.

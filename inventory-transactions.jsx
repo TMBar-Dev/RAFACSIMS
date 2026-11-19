@@ -3,7 +3,7 @@ import { Button, Card, TextField, Typography } from '@material-ui/core';
 import { RecordPicker, useResource } from './management-ui.jsx';
 import {
   CorrectionForm, DataTable, formatDate, InventoryHeading, InventoryLink, InventoryList,
-  inventoryHref, PrintRecord, queryId, usePosting
+  inventoryHref, PendingPosting, PrintRecord, queryId, usePosting
 } from './inventory-ui.jsx';
 
 const workflows = {
@@ -14,16 +14,21 @@ const workflows = {
 
 const lineColumns = [['Item', 'item_name'], ['Size', 'size'], ['Quantity', 'quantity']];
 
+function cadetLabel(cadet) {
+  return [`${cadet.first_name} ${cadet.last_name}`, cadet.service_number || `Cadet #${cadet.id}`, cadet.flight]
+    .filter(Boolean).join(' · ');
+}
+
 function RemarksField({ notes, setNotes }) {
   return <TextField className="order-remarks" label="Remarks" fullWidth multiline size="small" variant="outlined"
     value={notes} onChange={event => setNotes(event.target.value)} inputProps={{ maxLength: 1000 }} />;
 }
 
-function ReceiptForm({ request, order, backOrderId, onSave }) {
+function ReceiptForm({ posting, order, backOrderId, onSave }) {
   const remaining = order.lines.filter(line => line.remaining > 0);
   const [quantities, setQuantities] = useState({});
   const [notes, setNotes] = useState('');
-  const { saving, error, post } = usePosting(request);
+  const { saving, error, post } = posting;
   const canReceive = remaining.length > 0 && order.status !== 'cancelled' &&
     (!backOrderId || backOrderId === order.back_order_id);
   if (!canReceive) return <p className="message-banner" role="status">This order has no units available to receive.</p>;
@@ -72,7 +77,7 @@ function ReceiptForm({ request, order, backOrderId, onSave }) {
   );
 }
 
-function OutboundForm({ request, page, onSave }) {
+function OutboundForm({ request, page, posting, onSave }) {
   const issue = page === 'issues';
   const config = workflows[page];
   const [party, setParty] = useState(null);
@@ -81,7 +86,7 @@ function OutboundForm({ request, page, onSave }) {
   const [lines, setLines] = useState([]);
   const [notes, setNotes] = useState('');
   const [lineError, setLineError] = useState('');
-  const { saving, error, post } = usePosting(request);
+  const { saving, error, post } = posting;
 
   function addLine() {
     const units = Number(quantity);
@@ -97,8 +102,8 @@ function OutboundForm({ request, page, onSave }) {
     setVariant(null);
     setQuantity('1');
   }
-  const columns = [...lineColumns, ['Action', line => <Button type="button"
-    aria-label={`Remove ${line.item_name}, size ${line.size}`}
+  const columns = [...lineColumns, ...(issue ? [['Supplier', 'supplier_name']] : []), ['Action', line => <Button type="button"
+    aria-label={`Remove ${line.item_name}, size ${line.size}, from ${line.supplier_name}`}
     onClick={() => setLines(current => current.filter(value => value.id !== line.id))}>Remove</Button>]];
   return (
     <Card className="workspace-card screen-only" variant="outlined">
@@ -112,14 +117,15 @@ function OutboundForm({ request, page, onSave }) {
         }, onSave);
       }}>
         <fieldset disabled={saving} className="record-fieldset">
-          {lines.length ? <p>{config.party}: {issue ? `${party.first_name} ${party.last_name}` : party.name}</p>
+          {lines.length ? <p><strong>{config.party}</strong> {issue ? cadetLabel(party) : party.name}</p>
             : <RecordPicker request={request} label={config.party} endpoint={issue ? 'cadets?active=1' : 'suppliers?active=1'}
                 value={party} onChange={value => { setParty(value); setVariant(null); setLineError(''); }}
-                format={record => issue ? [record.first_name, record.last_name, record.service_number].filter(Boolean).join(' ') : record.name} />}
+                format={record => issue ? cadetLabel(record) : record.name} />}
           {party && <div className="order-line-picker">
             <RecordPicker request={request} key={party.id} label="Item size" value={variant} onChange={setVariant}
               endpoint={`variants?active=1&inStock=1${issue ? '' : `&supplierId=${party.id}`}`}
-              format={record => `${record.item_name} · ${record.size} · ${record.available} available`} />
+              format={record => [record.item_name, record.size, issue && record.supplier_name, `${record.available} available`]
+                .filter(Boolean).join(' · ')} />
             <div className="record-tools">
               <TextField disabled={!variant} label="New line quantity" type="number" value={quantity}
                 size="small" variant="outlined" inputProps={{ min: 1, step: 1 }}
@@ -144,7 +150,7 @@ function OutboundForm({ request, page, onSave }) {
   );
 }
 
-export default function TransactionsPage({ request, page, query, canCorrect }) {
+export default function TransactionsPage({ request, page, query, canCorrect, postingOwner }) {
   const config = workflows[page];
   const id = queryId(query, 'id');
   const orderId = queryId(query, 'order');
@@ -152,6 +158,7 @@ export default function TransactionsPage({ request, page, query, canCorrect }) {
   const cadetId = queryId(query, 'cadetId');
   const [revision, setRevision] = useState(0);
   const [correcting, setCorrecting] = useState(false);
+  const posting = usePosting(request, { owner: postingOwner, workflow: page });
   const detail = useResource(request, id ? `${page}/${id}` : null, revision);
   const order = useResource(request, orderId && page === 'receipts' ? `purchase-orders/${orderId}` : null, revision);
   const record = detail?.data?.record;
@@ -169,10 +176,12 @@ export default function TransactionsPage({ request, page, query, canCorrect }) {
         {page === 'receipts' ? <InventoryLink page="orders">Open orders</InventoryLink>
           : <InventoryLink page={page} query={{ create: 1 }}>New {config.name.toLowerCase()}</InventoryLink>}
       </InventoryHeading>
-      {orderId && page === 'receipts' && (order?.data ? <ReceiptForm request={request}
+      <PendingPosting posting={posting} onSave={saved} />
+      {orderId && page === 'receipts' && (order?.data ? <ReceiptForm posting={posting}
         order={order.data.record} backOrderId={queryId(query, 'backOrder')} onSave={saved} />
         : <p role={order?.error ? 'alert' : 'status'}>{order?.error ?? 'Loading order lines…'}</p>)}
-      {page !== 'receipts' && query.get('create') === '1' && <OutboundForm request={request} page={page} onSave={saved} />}
+      {page !== 'receipts' && query.get('create') === '1' && <OutboundForm request={request}
+        page={page} posting={posting} onSave={saved} />}
       {id && !record && <p role={detail?.error ? 'alert' : 'status'}>{detail?.error ?? 'Loading details…'}</p>}
       {record && (
         <>

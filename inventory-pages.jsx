@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Button, Card, TextField, Typography } from '@material-ui/core';
-import { RecordPicker, useResource } from './management-ui.jsx';
+import { Button, Card, Typography } from '@material-ui/core';
+import { useResource } from './management-ui.jsx';
 import {
-  DataTable, formatDate, InventoryHeading, InventoryLink, InventoryList, inventoryHref, PrintRecord, queryId, usePosting
+  CorrectionForm, DataTable, formatDate, InventoryHeading, InventoryLink, InventoryList, PrintRecord, queryId
 } from './inventory-ui.jsx';
 
 const details = (result, label) => !result ? <p role="status">Loading {label}…</p>
@@ -55,39 +55,34 @@ export function BackOrders({ request, query }) {
   );
 }
 
-function OpeningBalance({ request }) {
-  const [legacy, setLegacy] = useState(null);
-  const [variant, setVariant] = useState(null);
-  const [notes, setNotes] = useState('');
-  const { saving, error, post } = usePosting(request);
+function OpeningHistory({ request, balanceId }) {
+  const [revision, setRevision] = useState(0);
+  const [correcting, setCorrecting] = useState(false);
+  const endpoint = balanceId ? 'opening-balances/' + balanceId : null;
+  const result = useResource(request, endpoint, revision);
+  const record = result?.data?.record;
   return (
-    <Card className="workspace-card" variant="outlined">
-      <Typography component="h2" variant="h6">Map legacy stock</Typography>
-      <p>Match a legacy stock record to its catalog size to carry its recorded quantity into the stock ledger once.</p>
-      <form aria-busy={saving} onSubmit={event => {
-        event.preventDefault();
-        if (!legacy || !variant) return;
-        post('opening-balances', { legacyId: legacy.id, variantId: variant.id, notes }, () => {
-          window.location.hash = inventoryHref('stock', { id: variant.item_id });
-        });
-      }}>
-        <fieldset disabled={saving} className="record-fieldset">
-          <RecordPicker request={request} endpoint="opening-balances" label="Legacy stock record" value={legacy}
-            onChange={setLegacy} format={row => [row.reference, row.description, row.size, `${row.quantity} units`].filter(Boolean).join(' · ')} />
-          <RecordPicker request={request} endpoint="variants?active=1" label="Catalog size" value={variant}
-            onChange={setVariant} format={row => `${row.item_name} · ${row.size}`} />
-          <TextField className="order-remarks" label="Mapping note" required fullWidth variant="outlined" value={notes}
-            onChange={event => setNotes(event.target.value)} inputProps={{ maxLength: 1000 }} />
-          <div className="record-tools">
-            <Button type="submit" color="primary" variant="contained" disabled={!legacy || !variant || !notes.trim()}>
-              {saving ? 'Posting…' : 'Post opening balance'}
-            </Button>
-            <Button type="button" disabled={saving} onClick={() => { window.location.hash = inventoryHref('stock'); }}>Cancel</Button>
-          </div>
-        </fieldset>
-        {error && <p className="error-message" role="alert">{error}</p>}
-      </form>
-    </Card>
+    <>
+      {balanceId && (record ? (
+        <Card className="workspace-card" variant="outlined">
+          <Typography component="h2" variant="h6">Opening balance {record.code}</Typography>
+          <p>{record.party_name} ? {record.actor_name} ? {formatDate(record.created_at)}</p>
+          {record.notes && <p>{record.notes}</p>}
+          <DataTable label="Opening balance lines" rows={record.lines}
+            columns={[["Item", 'item_name'], ["Size", 'size'], ["Quantity", 'quantity']]} />
+          {record.reversal_code ? <p>Reversed by {record.reversed_by} ? {record.reversal_code} ? {record.reversal_reason}</p>
+            : <Button type="button" color="secondary" onClick={() => setCorrecting(true)}>Reverse opening balance</Button>}
+        </Card>
+      ) : details(result, 'opening balance'))}
+      {correcting && record && !record.reversal_code && <CorrectionForm request={request}
+        endpoint={endpoint + '/reverse'} label="Reverse opening balance" onClose={() => setCorrecting(false)}
+        onSave={() => { setCorrecting(false); setRevision(value => value + 1); }} />}
+      <InventoryList key={revision} request={request} endpoint="opening-balances" title="Opening balance history" columns={[
+        ['Reference', 'code'], ['Source stock', 'party_name'], ['Units', 'unit_count'],
+        ['Status', row => row.reversal_code ? 'Reversed' : 'Posted'],
+        ['Details', row => <InventoryLink page="stock" query={{ opening: 1, balanceId: row.id }}>View {row.code}</InventoryLink>]
+      ]} />
+    </>
   );
 }
 
@@ -103,9 +98,9 @@ export function StockPage({ request, query, canCorrect }) {
   return (
     <>
       <InventoryHeading title="Stock Management">
-        {canCorrect && <InventoryLink page="stock" query={{ opening: 1 }}>Map legacy stock</InventoryLink>}
+        {canCorrect && <InventoryLink page="stock" query={{ opening: 1 }}>Opening balance history</InventoryLink>}
       </InventoryHeading>
-      {canCorrect && query.get('opening') === '1' && <OpeningBalance request={request} />}
+      {canCorrect && query.get('opening') === '1' && <OpeningHistory request={request} balanceId={queryId(query, 'balanceId')} />}
       {id && (record ? <>
         <Card className="workspace-card" variant="outlined">
           <div className="section-heading">

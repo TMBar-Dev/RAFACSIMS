@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 
+const BOOTSTRAP = 'ReviewBootstrap!123';
+
 // Real SQLite and Web Crypto with only D1's result/transaction shape adapted.
 // Everything stays in memory: these tests do not contact D1, build the frontend,
 // emulate browser cookie rules or establish Cloudflare runtime compatibility.
@@ -74,7 +76,7 @@ test('Staff Accounts and operational workflows', async t => {
     const response = await worker.fetch(new Request(`${origin}/api/${path}`, {
       method: body === undefined ? 'GET' : 'POST', headers,
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
-    }), { DB });
+    }), { DB, ADMIN_BOOTSTRAP_PASSWORD: BOOTSTRAP });
     return { status: response.status, data: await response.json(), cookie: response.headers.get('Set-Cookie')?.split(';')[0] };
   }
   const credentials = {
@@ -86,7 +88,7 @@ test('Staff Accounts and operational workflows', async t => {
     assert.equal((await request('staff')).status, 401);
     assert.equal((await request('operations/access')).status, 401);
     assert.equal((await request('staff', { body: credentials })).status, 401);
-    const initial = await request('login', { body: { username: 'admin', password: 'RAFACSIMS' } });
+    const initial = await request('login', { body: { username: 'admin', password: BOOTSTRAP } });
     assert.equal(initial.status, 200);
     assert.equal((await request('staff', { cookie: initial.cookie })).status, 403);
     assert.deepEqual(await request('operations/access', { cookie: initial.cookie }), {
@@ -94,7 +96,7 @@ test('Staff Accounts and operational workflows', async t => {
     });
     assert.equal((await request('staff', { cookie: initial.cookie, body: credentials })).status, 403);
     const changed = await request('change-password', { cookie: initial.cookie,
-      body: { currentPassword: 'RAFACSIMS', newPassword: 'ChangedAdmin!123' } });
+      body: { currentPassword: BOOTSTRAP, newPassword: 'ChangedAdmin!123' } });
     assert.equal(changed.status, 200);
     adminCookie = changed.cookie;
     const list = await request('staff', { cookie: adminCookie });
@@ -117,7 +119,7 @@ test('Staff Accounts and operational workflows', async t => {
     assert.equal(stored.appointment, 'Keep this appointment');
     assert.equal(DB.database.prepare("SELECT password_hash FROM users WHERE username = 'admin'").get().password_hash, password);
     assert.equal((await request('login', { body: { username: 'admin', password: 'ChangedAdmin!123' } })).status, 200);
-    assert.equal((await request('login', { body: { username: 'admin', password: 'RAFACSIMS' } })).status, 401);
+    assert.equal((await request('login', { body: { username: 'admin', password: BOOTSTRAP } })).status, 401);
   });
 
   await t.test('ordinary users and cross-origin requests cannot create staff logins', async () => {
@@ -272,7 +274,8 @@ test('Staff Accounts and operational workflows', async t => {
     assert.equal((await request('cadets', { ...admin, body: { ...cadet, service_number: 'c-100' } })).status, 409);
     assert.equal((await request('cadets?q=alex%20ex', staffSession)).data.records[0].id, created.data.id);
     assert.equal((await request(cadetPath, staffSession)).data.record.date_joined, cadet.date_joined);
-    assert.equal((await request(cadetPath, { ...admin, body: { ...cadet, status: 'left' } })).status, 200);
+    assert.equal((await request(cadetPath, { ...admin, body: { ...cadet, status: 'left', version: 1 } })).status, 200);
+    assert.equal((await request(cadetPath, { ...admin, body: { ...cadet, status: 'active', version: 1 } })).status, 409);
     assert.equal((await request(cadetPath, staffSession)).status, 404);
     assert.equal((await request(cadetPath, admin)).data.record.status, 'left');
 
@@ -289,7 +292,7 @@ test('Staff Accounts and operational workflows', async t => {
     const small = await request('variants', { ...admin, body: variant });
     assert.equal(small.status, 201);
     assert.equal((await request('variants', { ...admin, body: { ...variant, size: 'small' } })).status, 409);
-    assert.equal((await request(`variants/${small.data.id}`, { ...admin, body: { status: 'inactive' } })).status, 200);
+    assert.equal((await request(`variants/${small.data.id}`, { ...admin, body: { status: 'inactive', version: 1 } })).status, 200);
     assert.deepEqual((await request(`variants?itemId=${catalog.data.id}`, staffSession)).data.records, []);
     assert.equal((await request(`variants/${small.data.id}`, admin)).data.record.size, 'Small');
 
@@ -335,6 +338,9 @@ test('Staff Accounts and operational workflows', async t => {
     assert.equal(created.status, 201);
     assert.match(created.data.code, /^PO-\d{4,}$/);
     assert.deepEqual(await request('purchase-orders', { ...staffSession, body }), created);
+    assert.equal((await request('purchase-orders', { ...staffSession, body: { ...body, notes: 'Changed after posting' } })).status, 409);
+    assert.deepEqual((await request(`posting-status/purchase-orders/${body.requestId}`, staffSession)).data, created.data);
+    assert.equal((await request(`posting-status/purchase-orders/${body.requestId}`, admin)).status, 404);
     const path = `purchase-orders/${created.data.id}`;
     const first = (await request(path, staffSession)).data.record;
     assert.equal(first.status, 'pending');
@@ -344,7 +350,7 @@ test('Staff Accounts and operational workflows', async t => {
     assert.equal(row.line_count, 2);
     assert.equal(row.unit_count, 10);
 
-    await request(`suppliers/${supplierId}`, { ...admin, body: { name: 'Renamed supplier', status: 'inactive' } });
+    await request(`suppliers/${supplierId}`, { ...admin, body: { name: 'Renamed supplier', status: 'inactive', version: 1 } });
     assert.deepEqual((await request(`variants?supplierId=${supplierId}`, staffSession)).data.records, []);
     assert.equal((await request(path, staffSession)).data.record.supplier_name, 'Uniform Supply');
     const change = { version: first.version, notes: 'Reduced order', lines: [{ variantId: medium, quantity: 5 }] };
@@ -394,6 +400,8 @@ test('Staff Accounts and operational workflows', async t => {
     const first = await receive(step, { requestId: 'test-receiving-first' });
     assert.equal(first.status, 201);
     assert.deepEqual(await receive(step, { requestId: 'test-receiving-first' }), first);
+    assert.deepEqual((await request('posting-status/receipts/test-receiving-first', staff)).data, first.data);
+    assert.equal((await request('posting-status/receipts/test-receiving-first', admin)).status, 404);
     assert.equal((await receive([{ orderLineId: smallLine, quantity: 7 }], { requestId: 'test-receiving-first' })).status, 409);
     const partial = await readOrder();
     assert.equal(partial.status, 'partial');
@@ -458,7 +466,7 @@ test('Staff Accounts and operational workflows', async t => {
     assert.deepEqual(await sizes(), [8, 4]);
     const issuePath = `issues/${issue.data.id}`;
     assert.equal((await request(`${issuePath}/reverse`, { ...staff, body: { reason: 'Correction' } })).status, 403);
-    assert.equal((await request(`cadets/${cadetId}`, { ...admin, body: { ...cadet, first_name: 'Updated' } })).status, 200);
+    assert.equal((await request(`cadets/${cadetId}`, { ...admin, body: { ...cadet, first_name: 'Updated', version: 1 } })).status, 200);
     assert.equal((await readKit()).name, 'Updated Fixture');
     assert.equal((await request(issuePath, staff)).data.record.party_name, 'Quinn Fixture');
     const correction = { reason: 'Incorrect recipient', requestId: 'test-uniform-reverse-0001' };
@@ -509,20 +517,25 @@ test('Staff Accounts and operational workflows', async t => {
     } })).status, 409);
 
     assert.equal((await request('opening-balances', staff)).status, 403);
-    const { id: legacyId } = (await request('opening-balances?q=v1-stock', admin)).data.records[0];
-    const opening = { legacyId, variantId: small.id, notes: 'Matched catalog size', requestId: 'test-opening-balance-0001' };
-    const posted = await request('opening-balances', { ...admin, body: opening });
-    assert.equal(posted.status, 201);
-    assert.deepEqual(await request('opening-balances', { ...admin, body: opening }), posted);
-    assert.equal((await request('opening-balances', { ...admin, body: { ...opening, requestId: 'test-opening-balance-0002' } })).status, 409);
+    const { id: legacyId } = DB.database.prepare("SELECT id FROM stock WHERE reference = 'V1-STOCK'").get();
+    assert.equal((await request('opening-balances', { ...admin, body: { legacyId, variantId: small.id } })).status, 405);
+    const old = DB.database.prepare(`INSERT INTO inventory_transactions
+      (kind, legacy_stock_id, party_name, actor_name, request_key, request_fingerprint, write_token)
+      VALUES ('opening', ?, 'V1-STOCK', 'admin', 'existing-opening', 'fixture', 'existing-opening-write') RETURNING id`).get(legacyId);
+    DB.database.prepare(`INSERT INTO stock_movements (transaction_id, variant_id, item_name, size, quantity_delta)
+      VALUES (?, ?, 'Ledger coat', 'Small', 12)`).run(old.id, small.id);
     assert.deepEqual(await sizes(), [17, 4]);
+    const oldPath = `opening-balances/${old.id}/reverse`;
+    assert.equal((await request(oldPath, { ...staff, body: { reason: 'Wrong variant' } })).status, 403);
+    assert.equal((await request(oldPath, { ...admin, body: { reason: 'Wrong variant' } })).status, 201);
+    assert.deepEqual(await sizes(), [5, 4]);
     assert.equal(DB.database.prepare('SELECT quantity FROM stock WHERE id = ?').get(legacyId).quantity, 12);
 
     const kitIssue = await request('issues', { ...staff, body: { cadetId, lines: [
       { variantId: small.id, quantity: 2 }, { variantId: large.id, quantity: 1 }
     ] } });
     assert.equal(kitIssue.status, 201);
-    assert.deepEqual(await sizes(), [15, 3]);
+    assert.deepEqual(await sizes(), [3, 3]);
     assert.equal((await readKit()).unit_count, 3);
     assert.equal((await readKit()).line_count, 2);
   });

@@ -79,33 +79,119 @@ export function PrintRecord({ title, children, actions }) {
   );
 }
 
-export function usePosting(request) {
+// Keep only the request ID in this tab. The API scopes recovery to the
+// signed-in account, and form fields never need to be written to storage.
+function readPending(key) {
+  if (!key) return null;
+  try {
+    const value = sessionStorage.getItem(key);
+    return /^[a-f0-9-]{36}$/.test(value ?? '') ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearPending(key, id) {
+  if (readPending(key) !== id) return;
+  try { sessionStorage.removeItem(key); } catch { /* The same ID remains safe to recover. */ }
+}
+
+export function usePosting(request, { owner, workflow } = {}) {
+  const storageKey = owner && workflow ? `rafacsims.pending.${owner}.${workflow}` : null;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [pendingId, setPendingId] = useState(() => readPending(storageKey));
+  const [recoveryMessage, setRecoveryMessage] = useState('');
   const mounted = useRef(true);
-  const pending = useRef(false);
-  const [requestId] = useState(() => crypto.randomUUID());
+  const busy = useRef(false);
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
 
-  async function post(path, body, onSave) {
-    if (pending.current) return;
-    pending.current = true;
+  async function perform(action) {
+    if (busy.current) return;
+    busy.current = true;
     setSaving(true);
     setError('');
+    setRecoveryMessage('');
     try {
-      const saved = await request(path, { ...body, requestId });
-      if (mounted.current) onSave(saved);
+      await action();
     } catch (error) {
       if (mounted.current) setError(error.message);
     } finally {
-      pending.current = false;
+      busy.current = false;
       if (mounted.current) setSaving(false);
     }
   }
-  return { saving, error, post };
+
+  function confirm(id, saved, onSave) {
+    // If the user left the page during the request, keep the ID even when the
+    // response succeeds. They still need to see which record was saved.
+    if (!mounted.current) return;
+    if (id) {
+      clearPending(storageKey, id);
+      setPendingId(null);
+    }
+    onSave(saved);
+  }
+
+  function post(path, body, onSave) {
+    return perform(async () => {
+      const tracked = path === workflow && Boolean(storageKey);
+      const previous = tracked ? readPending(storageKey) ?? pendingId : null;
+      const id = previous ?? crypto.randomUUID();
+      if (tracked) {
+        try { sessionStorage.setItem(storageKey, id); }
+        catch { throw new Error('Allow session storage in this tab before posting so interrupted saves can be recovered.'); }
+        setPendingId(id);
+      }
+      let result;
+      try {
+        result = await request(path, { ...body, requestId: id });
+      } catch (error) {
+        // An explicit application rejection can release a new request ID.
+        // A prior attempt may already have committed, regardless of how this
+        // retry failed. Keep that ID until the outcome is confirmed.
+        if (tracked && !previous && mounted.current && [400, 401, 403, 404, 405, 409, 413, 415, 429].includes(error.status)) {
+          clearPending(storageKey, id);
+          setPendingId(null);
+        }
+        throw error;
+      }
+      confirm(tracked ? id : null, result, onSave);
+    });
+  }
+
+  function recover(onSave) {
+    return perform(async () => {
+      const id = readPending(storageKey) ?? pendingId;
+      if (!id) return;
+      try {
+        const saved = await request(`posting-status/${workflow}/${id}`);
+        confirm(id, saved, onSave);
+      } catch (error) {
+        if (!mounted.current) return;
+        setRecoveryMessage(error.status === 404
+          ? 'No saved record was found yet. Re-enter the transaction to retry using the same request ID.'
+          : error.message);
+      }
+    });
+  }
+
+  return { saving, error, post, pendingId, recoveryMessage, recover };
+}
+
+export function PendingPosting({ posting, onSave }) {
+  if (!posting.pendingId) return null;
+  return (
+    <div className="message-banner screen-only">
+      <p>A previous save is awaiting confirmation in this tab.</p>
+      <Button type="button" variant="outlined" disabled={posting.saving}
+        onClick={() => posting.recover(onSave)}>Check previous save</Button>
+      {posting.recoveryMessage && <p role="status">{posting.recoveryMessage}</p>}
+    </div>
+  );
 }
 
 export function CorrectionForm({ request, endpoint, label, onSave, onClose }) {

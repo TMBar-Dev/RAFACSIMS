@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 
+const BOOTSTRAP = 'ReviewBootstrap!123';
+
 // Isolated API checks: real SQLite statements and Web Crypto, with a small D1
 // result-shape adapter. No network, production database or account is touched.
 // This does not emulate Workerd, Cloudflare limits or browser cookie handling.
@@ -12,8 +14,10 @@ class TestD1 {
   }
   prepare(sql) {
     const database = this.database;
+    const fixture = this;
     function statement(values = []) {
       function execute() {
+        fixture.beforeExecute?.(sql);
         const prepared = database.prepare(sql);
         let results = [];
         if (prepared.columns().length) results = prepared.all(...values).map(row => ({ ...row }));
@@ -27,6 +31,7 @@ class TestD1 {
         run: async () => execute(),
         all: async () => execute(),
         first: async () => {
+          fixture.beforeExecute?.(sql);
           const row = database.prepare(sql).get(...values);
           return row ? { ...row } : null;
         }
@@ -61,7 +66,7 @@ test('User Management, settings and account regressions', async t => {
     return worker.fetch(new Request(`${origin}/api/${path}`, {
       method: body === undefined ? 'GET' : 'POST', headers,
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
-    }), { DB });
+    }), { DB, ADMIN_BOOTSTRAP_PASSWORD: BOOTSTRAP });
   }
   async function request(path, options) {
     const response = await fetchApi(path, options);
@@ -77,13 +82,13 @@ test('User Management, settings and account regressions', async t => {
   await t.test('requires authentication and a changed admin password', async () => {
     assert.equal((await request('users')).status, 401);
     assert.equal((await request('users', { body: account })).status, 401);
-    const initial = await request('login', { body: { username: 'admin', password: 'RAFACSIMS' } });
+    const initial = await request('login', { body: { username: 'admin', password: BOOTSTRAP } });
     assert.equal(initial.status, 200);
     assert.equal(initial.data.user.mustChangePassword, true);
     assert.equal((await request('users', { cookie: initial.cookie })).status, 403);
     assert.equal((await request('users', { cookie: initial.cookie, body: account })).status, 403);
     const changed = await request('change-password', { cookie: initial.cookie,
-      body: { currentPassword: 'RAFACSIMS', newPassword: 'ChangedAdmin!123' } });
+      body: { currentPassword: BOOTSTRAP, newPassword: 'ChangedAdmin!123' } });
     assert.equal(changed.status, 200);
     adminCookie = changed.cookie;
     assert.notEqual(adminCookie, initial.cookie);
@@ -102,6 +107,12 @@ test('User Management, settings and account regressions', async t => {
     assert.equal((await request('users', { cookie: login.cookie, body: account })).status, 403);
     assert.equal((await request('users', { cookie: adminCookie, body: account, requestOrigin: 'https://other.example' })).status, 403);
     assert.equal(DB.database.prepare('SELECT count(*) AS total FROM users').get().total, 2);
+  });
+
+  await t.test('bounds ordinary JSON requests by actual bytes even without Content-Length', async () => {
+    const result = await request('register', { body: { username: 'oversized.test', password: 'é'.repeat(2300) } });
+    assert.equal(result.status, 413);
+    assert.equal(DB.database.prepare('SELECT id FROM users WHERE username = ?').get('oversized.test'), undefined);
   });
 
   await t.test('creates validated accounts with first-login enforcement and preserves account flows', async () => {
@@ -274,6 +285,34 @@ test('User Management, settings and account regressions', async t => {
     assert.equal(failed.status, 503);
     assert.equal((await request('branding')).data.logoUrl, logo.data.logoUrl);
     assert.equal(Buffer.from(await (await fetchApi('branding/logo')).arrayBuffer()).toString('base64'), png);
+    const replaced = await request('branding/logo', { ...admin, body: { content: jpeg } });
+    assert.equal(replaced.status, 200);
+    assert.equal(replaced.data.logoFallbackUrl, logo.data.logoUrl);
+    const prior = await fetchApi(logo.data.logoUrl.slice('/api/'.length));
+    assert.equal(Buffer.from(await prior.arrayBuffer()).toString('base64'), png);
+    const revision = new URL(logo.data.logoUrl, origin).searchParams.get('v');
+    assert.equal((await request('branding/logo', { ...admin, body: { restore: true, revision } })).data.logoUrl, logo.data.logoUrl);
+    assert.equal(Buffer.from(await (await fetchApi('branding/logo')).arrayBuffer()).toString('base64'), png);
+  });
+
+  await t.test('refuses account creation if the administrator session ends before its write', async () => {
+    const secondary = await request('login', { body: { username: 'admin', password: 'ChangedAdmin!123' } });
+    const token = secondary.cookie.split('=')[1];
+    const hash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))).toString('hex');
+    DB.beforeExecute = sql => {
+      if (/INSERT INTO users/i.test(sql) && /must_change_password/i.test(sql)) {
+        DB.database.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hash);
+      }
+    };
+    try {
+      const result = await request('users', { cookie: secondary.cookie, body: {
+        username: 'revoked.create', password: 'RevokedNewPassword!123', role: 'admin'
+      } });
+      assert.equal(result.status, 401);
+      assert.equal(DB.database.prepare('SELECT id FROM users WHERE username = ?').get('revoked.create'), undefined);
+    } finally {
+      DB.beforeExecute = undefined;
+    }
   });
 
   await t.test('requires another ready administrator and serializes competing deactivations', async () => {
@@ -302,4 +341,19 @@ test('User Management, settings and account regressions', async t => {
       WHERE role = 'admin' AND must_change_password = 0
       AND NOT EXISTS (SELECT 1 FROM account_deactivations WHERE user_id = u.id)`).get().total, 1);
   });
+});
+
+test('a fresh database requires deployment-controlled administrator provisioning', async t => {
+  const DB = new TestD1();
+  t.after(() => DB.database.close());
+  const { default: worker } = await import('./worker.js?review-no-bootstrap');
+  const response = await worker.fetch(new Request('https://rafacsims.example/api/session'), { DB });
+  assert.deepEqual(await response.json(), { user: null });
+  assert.equal(DB.database.prepare("SELECT id FROM users WHERE username = 'admin'").get(), undefined);
+  const { default: provisioned } = await import('./worker.js?review-with-bootstrap');
+  const enabled = await provisioned.fetch(new Request('https://rafacsims.example/api/session'), {
+    DB, ADMIN_BOOTSTRAP_PASSWORD: BOOTSTRAP
+  });
+  assert.equal(enabled.status, 200);
+  assert.equal(DB.database.prepare("SELECT must_change_password FROM users WHERE username = 'admin'").get().must_change_password, 1);
 });

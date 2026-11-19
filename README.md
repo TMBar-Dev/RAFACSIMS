@@ -60,7 +60,7 @@ After signing in and completing any required password change, the application pr
 | Orders | `#/orders` | Search, create, print and edit pending purchase orders. |
 | Receiving | `#/receipts` | Post quantities from a PO or BO and view or print receipt history. |
 | Back Orders | `#/back-orders` | View remaining quantities, print details and open receiving. |
-| Stock Management | `#/stock` | View live item and size balances and movement history. Administrators can map legacy stock as opening balances. |
+| Stock Management | `#/stock` | View live item and size balances, movements and any previously posted opening balances. |
 | Issue Uniform | `#/issues` | Issue stock to an active cadet and view or print issue history. |
 | Supplier Returns | `#/supplier-returns` | Send stock back to a supplier and view or print return history. |
 | Cadet Kit | `#/cadet-kit` | View issue history and unreversed issue, line and unit totals by cadet. |
@@ -80,7 +80,7 @@ Receive from a purchase order or its back order. A partial delivery opens a BO r
 
 Uniform issues and supplier returns reduce available stock. Cadet Kit counts posted, unreversed issues, and history retains the names recorded at posting. Supplier returns record the signed-in actor. Cadet handbacks and current holdings are outside these issue totals.
 
-Administrators can cancel a pending purchase order with no receiving history, or reverse a posted receipt, issue or supplier return with a recorded reason. Reversals preserve the original, post opposite quantities and refresh order or kit totals. Receipt reversals require enough stock to undo the receipt. To carry forward existing D1 stock, use **Map legacy stock** to match a legacy row to an active catalog size and post its quantity once. This leaves the source row intact.
+Administrators can cancel a pending purchase order with no receiving history, or reverse a posted receipt, issue, supplier return or historical opening balance with a recorded reason. A reversal preserves the original and requires enough available stock for any outbound correction. Historical source rows and movements remain intact. Legacy intake is outside the release scope.
 
 Existing registration, sign-in, session restoration, logout and password-change flows remain the account foundation. Management templates mount only after an authenticated session is restored or established and the account no longer requires its initial password to be changed. The optional password-change form remains available from the signed-in interface.
 
@@ -171,14 +171,11 @@ Before marking this layout verified in production:
 
 Remove any previous `--assets` command-line argument: wrangler.jsonc configures both the Worker API and assets. The build identity must have permission to deploy Workers and bind the specified D1 database. The database name in the config assumes `rafacsims`; adjust it if you chose another name. The database ID is already configured.
 
-The first API request after deployment creates any missing authentication and management tables, inserts admin only if the account does not already exist, and adds a missing staff link for that account. Existing admin passwords and linked staff profiles are preserved. No manual SQL or separate migration command is required for these initial table definitions. D1 must already exist; this code does not create the Cloudflare database resource.
+The first API request after deployment creates missing authentication and management tables. Keep the deployed D1 binding and existing administrator accounts. A fresh D1 database needs a deployment-controlled administrator secret as described below.
 
 ## First sign-in
 
-Username: admin
-Initial password: RAFACSIMS
-
-Sign in immediately after deployment and replace the initial password. The API restricts this session to password changes, session inspection and logout until the password is changed. A new password must contain 12–128 characters. The initial password is stored as a salted PBKDF2-SHA256 hash, not plaintext. Redeployments never reset an existing admin password. This initial credential is publicly known; whoever signs in first can claim the admin account.
+For a fresh D1 database or an untouched account that still uses the retired public credential, configure `ADMIN_BOOTSTRAP_PASSWORD` as a Cloudflare Worker secret with a unique password of 16–128 characters. Sign in as `admin` using the secret's value and complete the required password change. After verifying the new sign-in, remove the deployment secret. Redeploying preserves passwords already changed by the administrator. Accounts still using the retired credential and sessions tied to it are blocked until the account is provisioned.
 
 Public registration creates ordinary users, never administrators. Sessions use random tokens, stored hashed in D1, in Secure/HttpOnly/SameSite cookies with a 24-hour expiry. Password changes invalidate all prior sessions and issue a fresh token. API responses return only explicitly allowed account fields; password hashes and session tokens are never returned in response bodies.
 
@@ -198,19 +195,20 @@ The local `V1/` copy is reference material. Importing legacy accounts or operati
 - GET /api/staff?after=0 returns up to 25 entries ordered by staff ID, along with the next cursor or null. Each entry contains its staff ID and an account with ID, username, role, active status and password-change status. Unlinked entries have a null account.
 - POST /api/staff creates a staff login from username, password and role. To link an existing login, send username and accountMode set to existing. The response contains a confirmation message.
 - GET /api/branding and /api/branding/{logo,cover} provide the public display metadata and images. GET /api/about requires a ready signed-in account.
-- GET and POST /api/settings are administrator-only. POST accepts `name`, `shortName` and `aboutUs`. POST /api/branding/{logo,cover} accepts the image bytes as base64 in `content`.
+- GET and POST /api/settings are administrator-only. POST accepts `name`, `shortName` and `aboutUs`. POST /api/branding/{logo,cover} accepts base64 `content` or `restore: true` with the previous `revision`. The browser can fall back to a previous image if a replacement fails to render.
 
 Staff Accounts and User Management endpoints require an authenticated administrator who has completed any mandatory password change. Administrator writes use the same-origin JSON checks and are rate limited.
 
 - `GET /api/{cadets,suppliers,catalog,variants,purchase-orders}` returns up to 25 `records` and a `nextCursor`. Use `q` for search and `after` for the next page. Append `/ID` to get an individual `record`. Register lists support `active=1` for pickers. Catalog and variants support `supplierId`, and variants also support `itemId`.
-- `POST /api/{cadets,suppliers,catalog,variants}` creates a record. Append `/ID` to update one. Writes require an administrator and use the fields in the corresponding register.
+- `POST /api/{cadets,suppliers,catalog,variants}` creates a record. Append `/ID` to edit it, supplying the `version` obtained from that record's detail. A stale version returns a conflict. Writes require an administrator.
 - `POST /api/purchase-orders` creates an order with `supplierId`, optional `notes` and 1–50 `lines`. Each line has `variantId` and a positive whole `quantity` up to 1,000,000. A caller can reuse its `requestId` to recover the original reference if the create response is lost. Append `/ID` and supply the current `version` when editing a pending order.
 - `GET /api/purchase-orders/summary` returns `pending`, the count of orders awaiting all or part of their delivery.
 - `GET /api/{receipts,back-orders,issues,supplier-returns,cadet-kit,inventory-stock}` provides searchable lists and `/ID` details. Back orders also expose `/summary`. Stock item details expose `/ID/sizes` and `/ID/movements`. For filtered history use `orderId` on receipts or `cadetId` on issues.
 - `POST /api/receipts` accepts `orderId`, optional `backOrderId`, optional `notes` and lines with `orderLineId` and `quantity`. `POST /api/issues` or `POST /api/supplier-returns` accepts `cadetId` or `supplierId`, optional `notes` and lines with `variantId` and `quantity`. Reusing the same `requestId` with the same transaction data returns the original reference.
-- Administrators can POST `reason` to `/api/purchase-orders/ID/cancel` or to `/api/{receipts,issues,supplier-returns}/ID/reverse`. The administrator endpoint `/api/opening-balances` lists eligible legacy stock rows and accepts `legacyId`, `variantId` and mapping `notes`.
+- `GET /api/posting-status/{purchase-orders,receipts,issues,supplier-returns}/REQUEST_ID` returns the original reference to its author after an interrupted save. The browser keeps only a pending request ID in the current tab while the outcome is uncertain.
+- Administrators can POST `reason` to `/api/purchase-orders/ID/cancel` or to `/api/{receipts,issues,supplier-returns,opening-balances}/ID/reverse`. The administrator GET endpoint `/api/opening-balances` lists previously posted opening balances.
 
-Management writes share a per-IP rate limit separate from authentication and account maintenance. The isolated API suite covers register and order behaviour, partial and full receiving, repeated requests, competing stock writes, rollback, reversal audit, legacy mapping and cadet kit totals. Cloudflare build and browser verification cover the remaining integration checks.
+Management writes share a per-IP rate limit separate from authentication and account maintenance. The isolated API suite covers register and order conflicts, posting recovery, D1 stock invariants, opening-balance reversals, administrator provisioning and branding rollback. Cloudflare build and browser verification cover the remaining integration checks.
 
 JSON POST requests must include a matching Origin header (automatically sent by the browser). All API responses are private/no-store. Password hashing uses Workers Web Crypto PBKDF2 with 100,000 iterations for runtime compatibility. Authentication requests are rate limited by source IP using D1. Expired rate-limit buckets and sessions are removed opportunistically.
 

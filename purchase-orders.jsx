@@ -1,37 +1,31 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { Button, Card, TextField, Typography } from '@material-ui/core';
 import { RecordPager, RecordPicker, RecordSearch, useRecords, useResource } from './management-ui.jsx';
-import { CorrectionForm, formatDate, InventoryLink, PrintRecord } from './inventory-ui.jsx';
+import { CorrectionForm, formatDate, InventoryLink, PendingPosting, PrintRecord, usePosting } from './inventory-ui.jsx';
 
 const ENDPOINT = 'purchase-orders';
 const MAX_LINES = 50;
 const MAX_QUANTITY = 1_000_000;
 const statuses = { pending: 'Pending', partial: 'Partially received', received: 'Received', cancelled: 'Cancelled' };
 
-function OrderEditor({ request, record, onSave, onCancel }) {
+function OrderEditor({ request, record, posting, onSave, onCancel }) {
   const [supplier, setSupplier] = useState(record ? { id: record.supplier_id, name: record.supplier_name } : null);
   const [notes, setNotes] = useState(record?.notes ?? '');
   const [lines, setLines] = useState(record?.lines ?? []);
   const [variant, setVariant] = useState(null);
   const [quantity, setQuantity] = useState('1');
-  const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [requestId] = useState(() => crypto.randomUUID());
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
+  const [lineError, setLineError] = useState('');
+  const { error, saving, post } = posting;
 
   function addLine() {
-    setError('');
+    setLineError('');
     const units = Number(quantity);
     if (!Number.isInteger(units) || units < 1 || units > MAX_QUANTITY) {
-      setError('Enter a whole quantity between 1 and 1,000,000.');
+      setLineError('Enter a whole quantity between 1 and 1,000,000.');
       return;
     }
     if (lines.some(line => line.variant_id === variant.id)) {
-      setError('That item size is already on this order. Edit its quantity in the table.');
+      setLineError('That item size is already on this order. Edit its quantity in the table.');
       return;
     }
     setLines(lines => [...lines, { variant_id: variant.id, item_name: variant.item_name, size: variant.size, quantity: units }]);
@@ -39,28 +33,19 @@ function OrderEditor({ request, record, onSave, onCancel }) {
     setQuantity('1');
   }
 
-  async function save(event) {
+  function save(event) {
     event.preventDefault();
     if (saving || !supplier || !lines.length) return;
     if (variant) {
-      setError('Add the selected item size to the order or clear the selection before saving.');
+      setLineError('Add the selected item size to the order or clear the selection before saving.');
       return;
     }
-    setSaving(true);
-    setError('');
-    try {
-      const body = {
-        ...(record ? { version: record.version } : { supplierId: supplier.id, requestId }),
-        notes,
-        lines: lines.map(line => ({ variantId: line.variant_id, quantity: Number(line.quantity) }))
-      };
-      const saved = await request(record ? `${ENDPOINT}/${record.id}` : ENDPOINT, body);
-      if (mounted.current) onSave(saved);
-    } catch (error) {
-      if (mounted.current) setError(error.message);
-    } finally {
-      if (mounted.current) setSaving(false);
-    }
+    setLineError('');
+    post(record ? `${ENDPOINT}/${record.id}` : ENDPOINT, {
+      ...(record ? { version: record.version } : { supplierId: supplier.id }),
+      notes,
+      lines: lines.map(line => ({ variantId: line.variant_id, quantity: Number(line.quantity) }))
+    }, onSave);
   }
 
   return (
@@ -95,7 +80,7 @@ function OrderEditor({ request, record, onSave, onCancel }) {
             <Button type="button" onClick={onCancel} disabled={saving}>Cancel</Button>
           </div>
         </fieldset>
-        {error && <p className="error-message" role="alert">{error}</p>}
+        {(lineError || error) && <p className="error-message" role="alert">{lineError || error}</p>}
       </form>
     </Card>
   );
@@ -169,12 +154,13 @@ export function PurchaseOrderSummary({ request }) {
   );
 }
 
-export default function PurchaseOrders({ request, initialId, canCorrect }) {
+export default function PurchaseOrders({ request, initialId, canCorrect, postingOwner }) {
   const [selectedId, setSelectedId] = useState(initialId);
   const [editing, setEditing] = useState(false);
   const [revision, setRevision] = useState(0);
   const [notice, setNotice] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const posting = usePosting(request, { owner: postingOwner, workflow: ENDPOINT });
   const list = useRecords(request, ENDPOINT, revision);
   const detail = useResource(request, selectedId ? `${ENDPOINT}/${selectedId}` : null, revision);
   const record = detail?.data?.record;
@@ -197,8 +183,9 @@ export default function PurchaseOrders({ request, initialId, canCorrect }) {
     <>
       <header className="page-heading screen-only"><Typography component="h1" variant="h4">Orders</Typography></header>
       {notice && <p className="message-banner screen-only" role="status">{notice}</p>}
+      <PendingPosting posting={posting} onSave={saved} />
       {editing && (!selectedId || record) && <OrderEditor request={request} record={record}
-        onSave={saved} onCancel={() => setEditing(false)} />}
+        posting={posting} onSave={saved} onCancel={() => setEditing(false)} />}
       {selectedId && !editing && (record
         ? <OrderDetail record={record} onClose={() => select(null)} onEdit={() => { setCancelling(false); setEditing(true); }}
             onCancelOrder={canCorrect ? () => setCancelling(true) : undefined} />

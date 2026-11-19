@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import './App.css';
 import '@fontsource/roboto/400.css';
@@ -20,20 +20,23 @@ const printPages = ['orders', 'back-orders', ...transactionPages];
 // The interface and API share an origin. The browser sends the HttpOnly session
 // cookie automatically; JavaScript never needs to read or store its token.
 // A missing body means GET; supplying a body means a JSON POST.
-async function api(path, body) {
+async function requestApi(path, body) {
   const response = await fetch(`/api/${path}`, body === undefined ? {} : {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
-  const data = await response.json();
-  if (!response.ok) throw Object.assign(new Error(data.message || 'Request failed.'), { status: response.status });
-  return data;
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw Object.assign(new Error(data?.message || 'Request failed.'), { status: response.status });
+  }
+  return response.json();
 }
 
 function App() {
   // `user` contains only the public account fields returned by worker.js.
   const [user, setUser] = useState(null);
+  const activeUser = useRef(null);
   const [branding, setBranding] = useState({});
   const [operationalAccess, setOperationalAccess] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -46,9 +49,41 @@ function App() {
   const [confirmation, setConfirmation] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
   const [hash, setHash] = useState(() => window.location.hash);
+  const [logoFailure, setLogoFailure] = useState(null);
+  const [coverUrl, setCoverUrl] = useState(null);
   const page = readPageHash(hash);
   const systemName = branding.name ?? 'RAFACSIMS';
   const shortName = branding.shortName ?? 'RAFACSIMS';
+  const logoUrl = branding.logoUrl && logoFailure?.primary === branding.logoUrl
+    ? (logoFailure.hidden ? null : branding.logoFallbackUrl)
+    : branding.logoUrl;
+
+  const updateUser = useCallback(next => {
+    activeUser.current = next;
+    setUser(next);
+  }, []);
+
+  const clearSession = useCallback(expected => {
+    // An older response must not sign out a newly established session.
+    if (activeUser.current !== expected) return false;
+    updateUser(null);
+    setOperationalAccess(null);
+    setPassword('');
+    setNewPassword('');
+    setConfirmation('');
+    setChangingPassword(false);
+    return true;
+  }, [updateUser]);
+
+  const api = useCallback(async (path, body) => {
+    const startedWith = activeUser.current;
+    try { return await requestApi(path, body); }
+    catch (error) {
+      if (error.status === 401 && path !== 'login' && startedWith && clearSession(startedWith))
+        setMessage('Your session ended. Please sign in again.');
+      throw error;
+    }
+  }, [clearSession]);
 
   useEffect(() => {
     let active = true;
@@ -56,7 +91,26 @@ function App() {
       if (active) setBranding(current => ({ ...data, ...current }));
     }).catch(() => { /* Keep built-in branding available during a settings outage. */ });
     return () => { active = false; };
-  }, []);
+  }, [api]);
+
+  useEffect(() => {
+    let active = true;
+    async function chooseCover() {
+      for (const url of [branding.coverUrl, branding.coverFallbackUrl]) {
+        if (!url) continue;
+        try {
+          const image = new Image();
+          image.src = url;
+          await image.decode();
+        } catch { continue; }
+        if (active) setCoverUrl(url);
+        return;
+      }
+      if (active) setCoverUrl(null);
+    }
+    chooseCover();
+    return () => { active = false; };
+  }, [branding.coverUrl, branding.coverFallbackUrl]);
 
   useEffect(() => { document.title = systemName; }, [systemName]);
 
@@ -84,17 +138,44 @@ function App() {
         if (active) setOperationalAccess({ user, allowed: false, error: error.status === 403 ? '' : error.message });
       });
     return () => { active = false; };
-  }, [user]);
+  }, [api, user]);
 
   // Restore the existing session once at startup. Ignore a response arriving
   // after unmount instead of updating a component that is no longer active.
   useEffect(() => {
     let active = true;
-    api('session').then(data => { if (active) setUser(data.user); })
+    api('session').then(data => { if (active) updateUser(data.user); })
       .catch(error => { if (active) setMessage(error.message); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [api, updateUser]);
+
+  // A tab left open can still display loaded data after server-side expiry.
+  // Refresh on return to the tab and periodically while it remains visible.
+  useEffect(() => {
+    if (!user) return;
+    async function checkSession() {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const { user: current } = await api('session');
+        if (activeUser.current !== user) return;
+        if (!current && clearSession(user)) {
+          setMessage('Your session ended. Please sign in again.');
+        } else if (current && (current.username !== user.username || current.role !== user.role ||
+            current.mustChangePassword !== user.mustChangePassword)) {
+          if (clearSession(user)) updateUser(current);
+        }
+      } catch { /* A transient network failure is not proof of session expiry. */ }
+    }
+    const timer = window.setInterval(checkSession, 60_000);
+    window.addEventListener('focus', checkSession);
+    document.addEventListener('visibilitychange', checkSession);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', checkSession);
+      document.removeEventListener('visibilitychange', checkSession);
+    };
+  }, [api, clearSession, updateUser, user]);
 
   // Keep submission/loading/error behavior consistent across account actions.
   async function perform(action) {
@@ -109,7 +190,7 @@ function App() {
     event.preventDefault();
     perform(async () => {
       const data = await api('login', { username, password });
-      setUser(data.user);
+      updateUser(data.user);
       setPassword('');
     });
   };
@@ -119,14 +200,11 @@ function App() {
     setMessage(data.message);
     setPassword('');
   });
-  // Clear local account/password state only after the server ends the session.
   const logout = () => perform(async () => {
+    const startedWith = activeUser.current;
+    // An already-ended session still has a successful, cookie-clearing logout.
     await api('logout', {});
-    setUser(null);
-    setPassword('');
-    setNewPassword('');
-    setConfirmation('');
-    setChangingPassword(false);
+    clearSession(startedWith);
   });
   // Confirm the new value here; worker.js verifies the current password,
   // invalidates older sessions and replaces the cookie after saving the change.
@@ -135,7 +213,7 @@ function App() {
     perform(async () => {
       if (newPassword !== confirmation) throw new Error('New passwords must match.');
       const data = await api('change-password', { currentPassword: password, newPassword });
-      setUser(data.user);
+      updateUser(data.user);
       setPassword('');
       setNewPassword('');
       setConfirmation('');
@@ -157,17 +235,19 @@ function App() {
 
   function workspacePage() {
     const canCorrect = user.role === 'admin';
+    const postingOwner = user.username.toLowerCase();
     switch (page) {
       case 'dashboard': return <Dashboard user={user} canOperate={canOperate} request={api} />;
       case 'users': return <UserManagement request={api} currentUser={user} />;
       case 'staff': return <StaffAccounts request={api} currentUser={user} />;
       case 'settings': return <SettingsPage request={api} onUpdated={update => setBranding(current => ({ ...current, ...update }))} />;
-      case 'orders': return <PurchaseOrders key={hash} request={api} initialId={queryId(query, 'id')} canCorrect={canCorrect} />;
-      case 'stock': return <StockPage key={hash} request={api} query={query} canCorrect={canCorrect} />;
+      case 'orders': return <PurchaseOrders key={hash} request={api} initialId={queryId(query, 'id')} canCorrect={canCorrect}
+        postingOwner={postingOwner} />;
+      case 'stock': return <StockPage key={hash} request={api} query={query} canCorrect={canCorrect} postingOwner={postingOwner} />;
       case 'back-orders': return <BackOrders key={hash} request={api} query={query} />;
       case 'cadet-kit': return <CadetKit key={hash} request={api} query={query} />;
       default: return transactionPages.includes(page)
-        ? <TransactionsPage key={hash} request={api} page={page} query={query} canCorrect={canCorrect} />
+        ? <TransactionsPage key={hash} request={api} page={page} query={query} canCorrect={canCorrect} postingOwner={postingOwner} />
         : <RegisterPage key={page} request={api} resource={page} canEdit={canCorrect} />;
     }
   }
@@ -176,10 +256,12 @@ function App() {
   // panel is expanded into a navigable workspace; protected pages mount last.
   return (
     <div className={showWorkspace && printPages.includes(page) ? 'App print-record-page' : 'App'}
-      style={!showWorkspace && branding.coverUrl ? { backgroundImage: `url("${branding.coverUrl}")` } : undefined}>
+      style={!showWorkspace && coverUrl ? { backgroundImage: `url("${coverUrl}")` } : undefined}>
       <AppBar position="static"><Toolbar className="app-toolbar">
         <div className="app-brand">
-          {branding.logoUrl && <img src={branding.logoUrl} alt="" />}
+          {logoUrl && <img src={logoUrl} alt="" onError={() => setLogoFailure({
+            primary: branding.logoUrl, hidden: logoUrl === branding.logoFallbackUrl
+          })} />}
           <Typography variant="h6">{shortName}</Typography>
         </div>
         {user && <div className="account-controls">
@@ -191,7 +273,7 @@ function App() {
       </Toolbar></AppBar>
       <main className={showWorkspace ? 'workspace' : 'account-area'}>
         {showWorkspace ? (
-          <div className="workspace-shell">
+          <div className="workspace-shell" key={user.username.toLowerCase()}>
             <aside className="workspace-sidebar">
               <p className="eyebrow">Workspace</p>
               <nav aria-label="Main navigation">

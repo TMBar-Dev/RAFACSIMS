@@ -8,10 +8,18 @@ export const MAX_QUANTITY = 1_000_000;
 
 export function text(value, label, max, required = false) {
   if (typeof value !== 'string') fail(`${label} must be text.`);
-  const trimmed = value.trim();
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(value))
+    fail(`${label} contains unsupported control characters.`);
+  const trimmed = value.trim().normalize('NFC');
   if (trimmed.length > max || (required && !trimmed))
     fail(`${label} must contain ${required ? 1 : 0}–${max} characters.`);
   return trimmed;
+}
+
+function singleLine(value, label, max, required = false) {
+  const result = text(value, label, max, required);
+  if (/[\r\n\t\u2028\u2029]/.test(result)) fail(`${label} must be on one line.`);
+  return result;
 }
 
 function choice(value, label, allowed) {
@@ -35,17 +43,18 @@ function joiningDate(value) {
 
 // SQL identifiers come exclusively from this registry. Request values always
 // travel as bindings, including filters and the text used for search.
+const VARIANT_QUANTITY = 'coalesce((SELECT sum(quantity_delta) FROM stock_movements WHERE variant_id = r.id), 0)';
 const REGISTERS = {
   cadets: {
     table: 'cadets',
     fields: 'r.id, r.service_number, r.first_name, r.last_name, r.rank, r.flight, r.date_joined, r.status',
     search: "r.first_name || ' ' || r.last_name || ' ' || coalesce(r.service_number, '') || ' ' || r.rank || ' ' || r.flight",
     values: body => ({
-      service_number: text(body.service_number ?? '', 'Service number', 40) || null,
-      first_name: text(body.first_name, 'First name', 100, true),
-      last_name: text(body.last_name, 'Last name', 100, true),
-      rank: text(body.rank ?? '', 'Rank', 80),
-      flight: text(body.flight ?? '', 'Flight', 80),
+      service_number: singleLine(body.service_number ?? '', 'Service number', 40) || null,
+      first_name: singleLine(body.first_name, 'First name', 100, true),
+      last_name: singleLine(body.last_name, 'Last name', 100, true),
+      rank: singleLine(body.rank ?? '', 'Rank', 80),
+      flight: singleLine(body.flight ?? '', 'Flight', 80),
       date_joined: joiningDate(text(body.date_joined ?? '', 'Joining date', 10)),
       status: choice(body.status, 'status', ['active', 'inactive', 'left'])
     }),
@@ -56,10 +65,10 @@ const REGISTERS = {
     fields: 'r.id, r.name, r.address, r.contact_person, r.contact_number, r.status',
     search: "r.name || ' ' || r.contact_person || ' ' || r.contact_number",
     values: body => ({
-      name: text(body.name, 'Supplier name', 150, true),
+      name: singleLine(body.name, 'Supplier name', 150, true),
       address: text(body.address ?? '', 'Address', 400),
-      contact_person: text(body.contact_person ?? '', 'Contact person', 100),
-      contact_number: text(body.contact_number ?? '', 'Contact number', 50),
+      contact_person: singleLine(body.contact_person ?? '', 'Contact person', 100),
+      contact_number: singleLine(body.contact_number ?? '', 'Contact number', 50),
       status: choice(body.status, 'status', ['active', 'inactive'])
     }),
     duplicate: 'That supplier name is already in use.'
@@ -73,7 +82,7 @@ const REGISTERS = {
     search: "r.name || ' ' || r.description || ' ' || s.name || ' ' || r.uniform_type",
     values: (body, id) => ({
       ...(!id && { supplier_id: integer(body.supplier_id, 'Supplier') }),
-      name: text(body.name, 'Item name', 150, true),
+      name: singleLine(body.name, 'Item name', 150, true),
       description: text(body.description ?? '', 'Description', 500),
       uniform_type: choice(body.uniform_type, 'uniform type', ['blue', 'green']),
       status: choice(body.status, 'status', ['active', 'inactive'])
@@ -83,15 +92,15 @@ const REGISTERS = {
   },
   variants: {
     table: 'catalog_variants',
-    fields: 'r.id, r.item_id, r.size, r.status, i.name AS item_name, i.uniform_type, coalesce(balance.quantity, 0) AS available',
-    from: `JOIN catalog_items i ON i.id = r.item_id JOIN suppliers s ON s.id = i.supplier_id
-      LEFT JOIN variant_stock_balances balance ON balance.variant_id = r.id`,
+    fields: `r.id, r.item_id, r.size, r.status, i.name AS item_name, i.uniform_type, i.supplier_id,
+      s.name AS supplier_name, ${VARIANT_QUANTITY} AS available`,
+    from: 'JOIN catalog_items i ON i.id = r.item_id JOIN suppliers s ON s.id = i.supplier_id',
     active: "i.status = 'active' AND s.status = 'active'",
-    inStock: 'balance.quantity > 0',
+    inStock: `${VARIANT_QUANTITY} > 0`,
     filters: { supplierId: 'i.supplier_id', itemId: 'r.item_id' },
-    search: "i.name || ' ' || r.size || ' ' || i.uniform_type",
+    search: "i.name || ' ' || r.size || ' ' || i.uniform_type || ' ' || s.name",
     values: (body, id) => ({
-      ...(!id && { item_id: integer(body.item_id, 'Item'), size: text(body.size, 'Size', 80, true) }),
+      ...(!id && { item_id: integer(body.item_id, 'Item'), size: singleLine(body.size, 'Size', 80, true) }),
       status: choice(body.status, 'status', ['active', 'inactive'])
     }),
     parent: { table: 'catalog_items', key: 'item_id', label: 'catalog item' },
@@ -122,17 +131,23 @@ export function constraintError(error) {
   return [error.message, error.cause?.message].filter(Boolean).join(' ');
 }
 
+function registerVersion(config, idExpression) {
+  return `coalesce((SELECT version FROM register_versions
+    WHERE register_name = '${config.table}' AND record_id = ${idExpression}), 1)`;
+}
+
 async function readRegister(db, config, id, url, activeOnly) {
   const where = [];
   const binds = [];
   const from = `FROM ${config.table} r ${config.from ?? ''}`;
+  const fields = `${config.fields}, ${registerVersion(config, 'r.id')} AS version`;
   if (activeOnly) {
     where.push("r.status = 'active'");
     if (config.active) where.push(config.active);
   }
   if (config.inStock && url.searchParams.get('inStock') === '1') where.push(config.inStock);
   if (id) {
-    const record = await db.prepare(`SELECT ${config.fields} ${from}
+    const record = await db.prepare(`SELECT ${fields} ${from}
       WHERE ${[...where, 'r.id = ?'].join(' AND ')}`).bind(id).first();
     if (!record) fail('Record not found.', 404);
     return { record };
@@ -146,7 +161,7 @@ async function readRegister(db, config, id, url, activeOnly) {
     where.push(`${column} = ?`);
     binds.push(integer(Number(url.searchParams.get(param)), param));
   }
-  const result = await db.prepare(`SELECT ${config.fields} ${from}
+  const result = await db.prepare(`SELECT ${fields} ${from}
     WHERE ${where.join(' AND ')} ORDER BY r.id LIMIT ?`).bind(...binds, PAGE_SIZE + 1).all();
   return pageRows(result.results);
 }
@@ -164,12 +179,17 @@ async function writeRegister(db, resource, id, body) {
   const assignments = columns.map(column => `${column} = ?`);
   if (resource === 'cadets') assignments.push('updated_at = unixepoch()');
   const sql = id
-    ? `UPDATE ${config.table} SET ${assignments.join(', ')} WHERE id = ? RETURNING id`
+    ? `UPDATE ${config.table} SET ${assignments.join(', ')}
+        WHERE id = ? AND ${registerVersion(config, `${config.table}.id`)} = ? RETURNING id`
     : `INSERT INTO ${config.table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')}) RETURNING id`;
-  if (id) args.push(id);
+  if (id) args.push(id, integer(body.version, 'Record version'));
   try {
     const record = await db.prepare(sql).bind(...args).first();
-    if (!record) fail('Record not found.', 404);
+    if (!record) {
+      if (id && await db.prepare(`SELECT id FROM ${config.table} WHERE id = ?`).bind(id).first())
+        fail('This record changed since you opened it. Cancel, refresh and reopen it before editing.', 409);
+      fail('Record not found.', 404);
+    }
     return { id: record.id };
   } catch (error) {
     if (/UNIQUE constraint failed/i.test(constraintError(error))) fail(config.duplicate, 409);
@@ -230,11 +250,15 @@ async function writeOrder(db, id, body, userId) {
   const token = crypto.randomUUID();
   const supplierId = id ? null : integer(body.supplierId, 'Supplier');
   let creationKey;
+  let fingerprint;
   if (!id) {
     const requestId = body.requestId ?? token;
     if (typeof requestId !== 'string' || !/^[a-z0-9-]{16,64}$/i.test(requestId))
       fail('Invalid order request ID.');
     creationKey = `${userId}:${requestId}`;
+    const canonical = JSON.stringify([supplierId, notes, [...lines].sort((left, right) => left.variantId - right.variantId)]);
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+    fingerprint = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
   }
   const header = id
     ? db.prepare(`UPDATE purchase_orders SET notes = ?, updated_at = unixepoch(), version = version + 1, write_token = ?
@@ -262,16 +286,21 @@ async function writeOrder(db, id, body, userId) {
     WHERE order_id = (SELECT id FROM purchase_orders WHERE write_token = ?)
     AND variant_id NOT IN (SELECT json_extract(value, '$.variantId') FROM json_each(?))`).bind(token, payload);
   try {
-    const [result] = await db.batch(id ? [header, upsertLines, removeLines] : [header, upsertLines]);
+    // Fingerprint the original create in its own transaction so later edits
+    // never change which request is eligible for an idempotent replay.
+    const [result] = await db.batch([header, upsertLines, id ? removeLines : db.prepare(`
+      INSERT INTO purchase_order_requests (order_id, fingerprint)
+      SELECT id, ? FROM purchase_orders WHERE write_token = ?`).bind(fingerprint, token)]);
     const order = result.results[0];
     if (!order) {
       if (!id) {
         // A repeat of a committed create returns its original reference even
         // if the supplier was later retired. The key is scoped to this user.
-        const previous = await db.prepare('SELECT id, code, supplier_id FROM purchase_orders WHERE creation_key = ?')
-          .bind(creationKey).first();
+        const previous = await db.prepare(`SELECT o.id, o.code, r.fingerprint FROM purchase_orders o
+          LEFT JOIN purchase_order_requests r ON r.order_id = o.id WHERE o.creation_key = ?`).bind(creationKey).first();
         if (!previous) fail('Choose an active supplier.', 409);
-        if (previous.supplier_id !== supplierId) fail('This request already created an order for another supplier.', 409);
+        if (previous.fingerprint !== fingerprint)
+          fail(`This request already created ${previous.code}. Check the saved order before submitting another.`, 409);
         return { id: previous.id, code: previous.code };
       }
       if (!await db.prepare('SELECT id FROM purchase_orders WHERE id = ?').bind(id).first())

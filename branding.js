@@ -15,6 +15,14 @@ export const BRANDING_SCHEMA = [
     media_type TEXT NOT NULL CHECK(media_type IN ('image/png', 'image/jpeg')),
     content TEXT NOT NULL,
     revision TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS branding_image_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slot TEXT NOT NULL CHECK(slot IN ('logo', 'cover')),
+    media_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    UNIQUE(slot, revision)
   )`
 ];
 
@@ -65,7 +73,10 @@ export async function readBrandingUpload(request, maxBytes) {
 export async function readBranding(db, includeAbout = false) {
   const settings = await db.prepare(`SELECT name, short_name AS shortName${includeAbout ? ', about_us AS aboutUs' : ''}
     FROM branding_settings WHERE id = 1`).first();
-  const images = await db.prepare('SELECT slot, revision FROM branding_images').all();
+  const images = await db.prepare(`SELECT i.slot, i.revision,
+    (SELECT h.revision FROM branding_image_history h WHERE h.slot = i.slot AND h.revision != i.revision
+      ORDER BY h.id DESC LIMIT 1) AS previous_revision
+    FROM branding_images i`).all();
   return {
     name: 'RAFACSIMS',
     shortName: 'RAFACSIMS',
@@ -73,8 +84,9 @@ export async function readBranding(db, includeAbout = false) {
     ...settings,
     logoUrl: null,
     coverUrl: null,
-    ...Object.fromEntries(images.results.map(image => [
-      `${image.slot}Url`, imageUrl(image.slot, image.revision)
+    ...Object.fromEntries(images.results.flatMap(image => [
+      [`${image.slot}Url`, imageUrl(image.slot, image.revision)],
+      [`${image.slot}FallbackUrl`, image.previous_revision ? imageUrl(image.slot, image.previous_revision) : null]
     ]))
   };
 }
@@ -182,20 +194,45 @@ function decodeImage(content, slot) {
 }
 
 export async function saveBrandingImage(db, actor, slot, body) {
+  if (body.restore === true) {
+    const revision = typeof body.revision === 'string' && /^[a-f0-9-]{36}$/i.test(body.revision) ? body.revision : null;
+    if (!revision) fail('Choose a saved image revision.');
+    const saved = await db.prepare(`UPDATE branding_images SET
+      (media_type, content, revision) = (SELECT media_type, content, revision FROM branding_image_history
+        WHERE slot = ? AND revision = ?)
+      WHERE slot = ? AND EXISTS (SELECT 1 FROM branding_image_history WHERE slot = ? AND revision = ?)
+        AND ${LIVE_ADMIN} RETURNING revision`).bind(slot, revision, slot, slot, revision, actor.token_hash).first();
+    if (!saved) fail('The previous image or your administrator session is unavailable.', 409);
+    return { [`${slot}Url`]: imageUrl(slot, saved.revision), [`${slot}FallbackUrl`]: null };
+  }
   const type = decodeImage(body.content, slot);
   const revision = crypto.randomUUID();
-  const saved = await db.prepare(`INSERT INTO branding_images (slot, media_type, content, revision)
-    SELECT ?, ?, ?, ? WHERE ${LIVE_ADMIN}
-    ON CONFLICT(slot) DO UPDATE SET media_type = excluded.media_type, content = excluded.content,
-      revision = excluded.revision RETURNING slot`).bind(slot, type, body.content, revision, actor.token_hash).first();
+  // Archive the previous bytes in the same transaction. If an uploaded
+  // image passes format checks but fails to render, a previous revision is
+  // still available to browsers and administrators.
+  const [, result, , fallback] = await db.batch([
+    db.prepare(`INSERT INTO branding_image_history (slot, media_type, content, revision)
+      SELECT slot, media_type, content, revision FROM branding_images WHERE slot = ? AND ${LIVE_ADMIN}
+      ON CONFLICT(slot, revision) DO NOTHING`).bind(slot, actor.token_hash),
+    db.prepare(`INSERT INTO branding_images (slot, media_type, content, revision)
+      SELECT ?, ?, ?, ? WHERE ${LIVE_ADMIN}
+      ON CONFLICT(slot) DO UPDATE SET media_type = excluded.media_type, content = excluded.content,
+        revision = excluded.revision RETURNING slot`).bind(slot, type, body.content, revision, actor.token_hash),
+    db.prepare(`DELETE FROM branding_image_history WHERE slot = ? AND id NOT IN (
+      SELECT id FROM branding_image_history WHERE slot = ? ORDER BY id DESC LIMIT 3)
+      AND EXISTS (SELECT 1 FROM branding_images WHERE slot = ? AND revision = ?)`).bind(slot, slot, slot, revision),
+    db.prepare('SELECT revision FROM branding_image_history WHERE slot = ? ORDER BY id DESC LIMIT 1').bind(slot)
+  ]);
+  const saved = result.results[0];
   if (!saved) fail('Your administrator session changed. Sign in again.', 403);
-  // A follow-up read could fail after the new bytes commit, which would report
-  // a failed upload even though the previous image had already been replaced.
-  return { [`${slot}Url`]: imageUrl(slot, revision) };
+  const previous = fallback.results[0];
+  return { [`${slot}Url`]: imageUrl(slot, revision), [`${slot}FallbackUrl`]: previous ? imageUrl(slot, previous.revision) : null };
 }
 
-export async function serveBrandingImage(db, slot) {
-  const image = await db.prepare('SELECT media_type, content FROM branding_images WHERE slot = ?').bind(slot).first();
+export async function serveBrandingImage(db, slot, revision = null) {
+  const image = await db.prepare(`SELECT media_type, content FROM branding_images WHERE slot = ?
+    AND (? IS NULL OR revision = ?) UNION ALL SELECT media_type, content FROM branding_image_history
+    WHERE slot = ? AND revision = ? LIMIT 1`).bind(slot, revision, revision, slot, revision).first();
   if (!image) fail('Image not found.', 404);
   return new Response(imageBytes(image.content), {
     headers: {

@@ -4,13 +4,15 @@ const KINDS = { receipts: 'receipt', issues: 'issue', 'supplier-returns': 'retur
 const PAGE_LIMIT = 26;
 
 export function inventoryRoute(path) {
+  const status = /^\/api\/posting-status\/(purchase-orders|receipts|issues|supplier-returns)\/([a-z0-9-]{16,64})$/i.exec(path);
+  if (status) return { resource: 'posting-status', workflow: status[1].toLowerCase(), detail: status[2] };
   const cancellation = /^\/api\/purchase-orders\/(\d+)\/cancel$/.exec(path);
   if (cancellation) return { resource: 'purchase-orders', detail: cancellation[1], action: 'cancel' };
   const match = /^\/api\/(receipts|back-orders|inventory-stock|issues|supplier-returns|cadet-kit|opening-balances)(?:\/(\d+|summary)(?:\/(reverse|sizes|movements))?)?$/.exec(path);
   if (!match) return null;
   const [, resource, detail, action] = match;
   if (detail === 'summary' && (resource !== 'back-orders' || action)) return null;
-  if (action === 'reverse' && !['receipts', 'issues', 'supplier-returns'].includes(resource)) return null;
+  if (action === 'reverse' && !Object.hasOwn(KINDS, resource)) return null;
   if (['sizes', 'movements'].includes(action) && resource !== 'inventory-stock') return null;
   return { resource, detail, action };
 }
@@ -78,8 +80,9 @@ async function readBackOrders(db, detail, url) {
 async function readStock(db, id, action, url) {
   const { after, search } = queryPage(url);
   if (action === 'sizes') {
-    const result = await db.prepare(`SELECT v.id, v.size, v.status, coalesce(b.quantity, 0) AS quantity
-      FROM catalog_variants v LEFT JOIN variant_stock_balances b ON b.variant_id = v.id
+    const result = await db.prepare(`SELECT v.id, v.size, v.status,
+      coalesce((SELECT sum(m.quantity_delta) FROM stock_movements m WHERE m.variant_id = v.id), 0) AS quantity
+      FROM catalog_variants v
       WHERE v.item_id = ? AND v.id > ? AND instr(lower(v.size), lower(?)) > 0
       ORDER BY v.id LIMIT ?`).bind(id, after ?? 0, search, PAGE_LIMIT).all();
     return pageRows(result.results);
@@ -96,8 +99,8 @@ async function readStock(db, id, action, url) {
     return pageRows(result.results);
   }
   const result = await db.prepare(`SELECT i.id, i.name, i.description, i.uniform_type, i.status, s.name AS supplier_name,
-    coalesce((SELECT sum(b.quantity) FROM catalog_variants v
-      JOIN variant_stock_balances b ON b.variant_id = v.id WHERE v.item_id = i.id), 0) AS quantity
+    coalesce((SELECT sum(m.quantity_delta) FROM catalog_variants v
+      JOIN stock_movements m ON m.variant_id = v.id WHERE v.item_id = i.id), 0) AS quantity
     FROM catalog_items i JOIN suppliers s ON s.id = i.supplier_id
     WHERE (? IS NULL OR i.id = ?) AND i.id > ?
     AND instr(lower(i.name || ' ' || i.description || ' ' || s.name), lower(?)) > 0
@@ -129,23 +132,24 @@ async function readCadetKit(db, id, url) {
   return { record: result.results[0] };
 }
 
-async function readLegacyStock(db, url) {
-  const { after, search } = queryPage(url);
-  const result = await db.prepare(`SELECT s.id, s.reference, s.description, s.size, s.quantity FROM stock s
-    WHERE s.id > ? AND s.quantity > 0
-    AND NOT EXISTS (SELECT 1 FROM inventory_transactions t WHERE t.legacy_stock_id = s.id)
-    AND instr(lower(s.reference || ' ' || s.description || ' ' || s.size), lower(?)) > 0
-    ORDER BY s.id LIMIT ?`).bind(after ?? 0, search, PAGE_LIMIT).all();
-  return pageRows(result.results);
+async function readPostingStatus(db, workflow, requestId, userId) {
+  // Scope recovery to the original author, even when others can view the order.
+  const result = workflow === 'purchase-orders'
+    ? await db.prepare('SELECT id, code FROM purchase_orders WHERE creation_key = ?')
+      .bind(`${userId}:${requestId}`).first()
+    : await db.prepare('SELECT id, code FROM inventory_transactions WHERE request_key = ?')
+      .bind(`${userId}:${KINDS[workflow]}:${requestId}`).first();
+  if (!result) fail('No saved transaction was found for this request yet.', 404);
+  return result;
 }
 
-export function readInventory(db, { resource, detail, action }, url) {
+export function readInventory(db, { resource, detail, action, workflow }, url, user) {
   if (action === 'reverse' || action === 'cancel') fail('Use POST for this action.', 405);
+  if (resource === 'posting-status') return readPostingStatus(db, workflow, detail, user.id);
   if (resource === 'back-orders') return readBackOrders(db, detail, url);
   const id = detail ? integer(Number(detail), 'Record ID') : null;
   if (resource === 'inventory-stock') return readStock(db, id, action, url);
   if (resource === 'cadet-kit') return readCadetKit(db, id, url);
-  if (resource === 'opening-balances' && !id) return readLegacyStock(db, url);
   return readTransactions(db, KINDS[resource], id, url);
 }
 
@@ -263,26 +267,6 @@ async function postOutbound(db, kind, body, user) {
   return postingResult(db, identity, [header, movements], issue ? 'Choose an active cadet.' : 'Choose an active supplier.');
 }
 
-async function postOpening(db, body, user) {
-  const legacyId = integer(body.legacyId, 'Legacy stock record');
-  const variantId = integer(body.variantId, 'Item size');
-  const notes = text(body.notes ?? '', 'Mapping note', 1000, true);
-  const identity = await requestIdentity(body, user, 'opening', [legacyId, variantId, notes]);
-  const header = db.prepare(`INSERT INTO inventory_transactions
-      (kind, legacy_stock_id, party_name, actor_id, actor_name, notes, request_key, request_fingerprint, write_token)
-    SELECT 'opening', s.id, s.reference, ?, ?, ?, ?, ?, ? FROM stock s WHERE s.id = ? AND s.quantity > 0
-      AND NOT EXISTS (SELECT 1 FROM inventory_transactions t WHERE t.legacy_stock_id = s.id)
-    ${HEADER_TAIL}`).bind(user.id, user.username, notes, identity.key, identity.fingerprint, identity.token, legacyId);
-  const movement = db.prepare(`INSERT INTO stock_movements (transaction_id, variant_id, item_name, size, quantity_delta)
-    SELECT t.id, CASE WHEN supplier.id IS NOT NULL THEN v.id END, i.name, v.size, s.quantity
-    FROM inventory_transactions t JOIN stock s ON s.id = t.legacy_stock_id
-    LEFT JOIN catalog_variants v ON v.id = ? AND v.status = 'active'
-    LEFT JOIN catalog_items i ON i.id = v.item_id AND i.status = 'active'
-    LEFT JOIN suppliers supplier ON supplier.id = i.supplier_id AND supplier.status = 'active'
-    WHERE t.write_token = ?`).bind(variantId, identity.token);
-  return postingResult(db, identity, [header, movement], 'This legacy stock record is unavailable or has already been mapped.');
-}
-
 async function reverseTransaction(db, kind, id, body, user) {
   const reason = text(body.reason, 'Reversal reason', 1000, true);
   const identity = await requestIdentity(body, user, 'reversal', [kind, id, reason]);
@@ -315,11 +299,11 @@ async function cancelOrder(db, id, body, user) {
 }
 
 export function writeInventory(db, { resource, detail, action }, body, user) {
+  if (resource === 'posting-status') fail('Use GET to check posting status.', 405);
   const id = detail ? integer(Number(detail), 'Record ID') : null;
   if (action === 'cancel') return cancelOrder(db, id, body, user);
   if (action === 'reverse') return reverseTransaction(db, KINDS[resource], id, body, user);
   if (!id && resource === 'receipts') return postReceipt(db, body, user);
-  if (!id && resource === 'opening-balances') return postOpening(db, body, user);
   if (!id && ['issues', 'supplier-returns'].includes(resource)) return postOutbound(db, KINDS[resource], body, user);
   fail('Method not allowed.', 405);
 }

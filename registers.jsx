@@ -56,6 +56,7 @@ function displayValue(key, value) {
 
 function RegisterEditor({ request, resource, record, itemId, onSave, onCancel }) {
   const config = registers[resource];
+  const [version] = useState(record?.version);
   const [values, setValues] = useState(() => Object.fromEntries(config.fields.map(field => [
     field.key, record?.[field.key] ?? Object.keys(field.options ?? {})[0] ?? ''
   ])));
@@ -76,6 +77,7 @@ function RegisterEditor({ request, resource, record, itemId, onSave, onCancel })
     try {
       const path = record ? `${resource}/${record.id}` : resource;
       const body = { ...values };
+      if (record) body.version = version;
       if (!record && resource === 'catalog') body.supplier_id = supplier?.id;
       if (!record && resource === 'variants') body.item_id = itemId;
       const saved = await request(path, body);

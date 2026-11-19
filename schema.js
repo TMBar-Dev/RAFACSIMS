@@ -129,6 +129,23 @@ export const MANAGEMENT_SCHEMA = [
   'CREATE INDEX IF NOT EXISTS purchase_orders_status ON purchase_orders(status)',
   'CREATE INDEX IF NOT EXISTS purchase_orders_supplier ON purchase_orders(supplier_id)',
   'CREATE INDEX IF NOT EXISTS purchase_order_lines_variant ON purchase_order_lines(variant_id)',
+  // Side tables add concurrency metadata to existing databases without
+  // rebuilding registers or rewriting historical purchase orders.
+  `CREATE TABLE IF NOT EXISTS register_versions (
+    register_name TEXT NOT NULL,
+    record_id INTEGER NOT NULL,
+    version INTEGER NOT NULL CHECK(version > 1),
+    PRIMARY KEY (register_name, record_id)
+  )`,
+  ...['cadets', 'suppliers', 'catalog_items', 'catalog_variants'].map(table =>
+    `CREATE TRIGGER IF NOT EXISTS bump_${table}_version AFTER UPDATE ON ${table} BEGIN
+      INSERT INTO register_versions (register_name, record_id, version) VALUES ('${table}', NEW.id, 2)
+      ON CONFLICT (register_name, record_id) DO UPDATE SET version = version + 1;
+    END`),
+  `CREATE TABLE IF NOT EXISTS purchase_order_requests (
+    order_id INTEGER PRIMARY KEY REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL
+  )`,
   ...INVENTORY_SCHEMA
 ];
 

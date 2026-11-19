@@ -3,9 +3,9 @@
 import { MANAGEMENT_SCHEMA } from './schema.js';
 import { fail, managementRoute, readManagement, writeManagement } from './management.js';
 import { inventoryRoute, readInventory, writeInventory } from './inventory.js';
-import { ACCOUNT_ACTIVE, ACCOUNT_ADMIN_SCHEMA, administerAccount } from './account-admin.js';
+import { ACCOUNT_ACTIVE, ACCOUNT_ADMIN_SCHEMA, LIVE_ADMIN, administerAccount } from './account-admin.js';
 import {
-  BRANDING_SCHEMA, brandingBodyLimit, brandingImageSlot, readAbout, readBranding, readBrandingUpload,
+  BRANDING_SCHEMA, brandingBodyLimit, brandingImageSlot, readAbout, readBranding, readBrandingUpload as readBoundedBody,
   saveBranding, saveBrandingImage, serveBrandingImage
 } from './branding.js';
 
@@ -15,15 +15,42 @@ const ITERATIONS = 100000;
 const SESSION_SECONDS = 86400;
 // __Host- cookies require HTTPS, Secure, Path=/ and no Domain attribute.
 const COOKIE = '__Host-rafacsims';
-// Bootstrap record only. INSERT OR IGNORE below preserves an admin password
-// that has already been changed; this hash is not written over existing users.
-const ADMIN_HASH = 'pbkdf2$100000$475004062412af7965037c5326040053$ca2fda7f770b4c51d1b36f487286026209645347a4ef2bfd2a9b4ec29ba199ed';
+// Deny the retired public bootstrap hash, including pre-existing sessions.
+// It is never written to D1. A configured deployment secret can replace it.
+const RETIRED_BOOTSTRAP_HASH = 'pbkdf2$100000$475004062412af7965037c5326040053$ca2fda7f770b4c51d1b36f487286026209645347a4ef2bfd2a9b4ec29ba199ed';
+const DUMMY_PASSWORD_HASH = `pbkdf2$${ITERATIONS}$${randomToken()}$${'0'.repeat(64)}`;
 // Shared by requests in this Worker isolate, not a replacement for D1 storage.
 let ready;
 
-// CREATE IF NOT EXISTS and INSERT OR IGNORE also make cold-start races safe.
+const BOOTSTRAP_STAFF_LINK = `INSERT OR IGNORE INTO staff (user_id, first_name, last_name)
+  SELECT id, '-', '-' FROM users WHERE username = 'admin' AND role = 'admin' AND password_hash != ?`;
+
+// Provision once on a new database, or replace the exact untouched legacy
+// credential. The predicates also protect against concurrent cold starts.
+async function provisionAdministrator(db, password) {
+  if (typeof password === 'string' && password.trim().length >= 16 && password.length <= 128) {
+    const existing = await db.prepare("SELECT password_hash, role, must_change_password FROM users WHERE username = 'admin'").first();
+    if (!existing || (existing.password_hash === RETIRED_BOOTSTRAP_HASH && existing.role === 'admin' && existing.must_change_password)) {
+      const hash = await hashPassword(password);
+      await db.batch([
+        db.prepare(`INSERT OR IGNORE INTO users (username, password_hash, role, must_change_password)
+          SELECT 'admin', ?, 'admin', 1 WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')`).bind(hash),
+        db.prepare(`UPDATE users SET password_hash = ?
+          WHERE username = 'admin' AND role = 'admin' AND must_change_password = 1 AND password_hash = ?`)
+          .bind(hash, RETIRED_BOOTSTRAP_HASH),
+        db.prepare(`DELETE FROM sessions WHERE user_id IN (
+          SELECT id FROM users WHERE username = 'admin' AND password_hash = ?
+        )`).bind(hash),
+        db.prepare(BOOTSTRAP_STAFF_LINK).bind(RETIRED_BOOTSTRAP_HASH)
+      ]);
+      return;
+    }
+  }
+  await db.prepare(BOOTSTRAP_STAFF_LINK).bind(RETIRED_BOOTSTRAP_HASH).run();
+}
+
 // Concurrent requests share the initialization promise; a failure permits retry.
-async function initialize(db) {
+async function initialize(db, bootstrapPassword) {
   if (!ready) ready = db.batch([
     db.prepare(`CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,17 +74,9 @@ async function initialize(db) {
     ...BRANDING_SCHEMA.map(statement => db.prepare(statement)),
     // Add the management tables without changing existing authentication
     // records. Staff profiles can link to accounts through user_id.
-    ...MANAGEMENT_SCHEMA.map(statement => db.prepare(statement)),
-    db.prepare(`INSERT OR IGNORE INTO users
-      (username, password_hash, role, must_change_password) VALUES ('admin', ?, 'admin', 1)`)
-      .bind(ADMIN_HASH),
-    // Include the existing bootstrap administrator in the staff directory. This
-    // only inserts a missing profile: its password, role and existing profile
-    // details are never replaced on deployment or a Worker cold start.
-    db.prepare(`INSERT OR IGNORE INTO staff (user_id, first_name, last_name)
-      SELECT id, '-', '-'
-      FROM users WHERE username = 'admin' AND role = 'admin'`)
-  ]).catch(error => { ready = undefined; throw error; });
+    ...MANAGEMENT_SCHEMA.map(statement => db.prepare(statement))
+  ]).then(() => provisionAdministrator(db, bootstrapPassword))
+    .catch(error => { ready = undefined; throw error; });
   await ready;
 }
 
@@ -105,7 +124,9 @@ function publicStaff(row) {
 // Existing D1 tables require nonempty name columns. Fixed markers keep staff
 // IDs and order references intact while allowing links without personal data.
 const INSERT_STAFF_LINK = `INSERT INTO staff (user_id, first_name, last_name)
-  SELECT id, '-', '-' FROM users WHERE username = ?`;
+  SELECT id, '-', '-' FROM users WHERE username = ? AND ${LIVE_ADMIN}`;
+const INSERT_ADMIN_CREATED_USER = `INSERT INTO users (username, password_hash, role, must_change_password)
+  SELECT ?, ?, ?, 1 WHERE ${LIVE_ADMIN}`;
 function requireReadySession(user) {
   if (!user) fail('Please log in.', 401);
   if (user.must_change_password) fail('Change your password before continuing.', 403);
@@ -132,8 +153,9 @@ async function currentSession(request, db) {
     .find(v => v.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
   return db.prepare(`SELECT users.*, sessions.token_hash FROM sessions
-    JOIN users ON users.id = sessions.user_id WHERE token_hash = ? AND expires_at > ? AND ${ACCOUNT_ACTIVE}`)
-    .bind(await digest(token), Math.floor(Date.now() / 1000)).first();
+    JOIN users ON users.id = sessions.user_id
+    WHERE token_hash = ? AND expires_at > ? AND password_hash != ? AND ${ACCOUNT_ACTIVE}`)
+    .bind(await digest(token), Math.floor(Date.now() / 1000), RETIRED_BOOTSTRAP_HASH).first();
 }
 async function issueSession(db, user) {
   const token = randomToken();
@@ -163,10 +185,10 @@ async function api(request, env) {
     if (!(request.headers.get('Content-Type') || '').startsWith('application/json')) fail('JSON required.', 415);
   }
   if (!env.DB) fail('Database binding DB is not configured.', 503);
-  await initialize(env.DB);
+  await initialize(env.DB, env.ADMIN_BOOTSTRAP_PASSWORD);
   if (request.method === 'GET') {
     if (path === '/api/branding') return json(await readBranding(env.DB));
-    if (imageSlot) return serveBrandingImage(env.DB, imageSlot);
+    if (imageSlot) return serveBrandingImage(env.DB, imageSlot, url.searchParams.get('v'));
     if (path === '/api/settings') {
       requireAdministrator(await currentSession(request, env.DB));
       return json(await readBranding(env.DB, true));
@@ -194,7 +216,7 @@ async function api(request, env) {
     const user = await currentSession(request, env.DB);
     if (inventory.resource === 'opening-balances') requireAdministrator(user);
     else await requireOperationalAccess(user, env.DB);
-    return json(await readInventory(env.DB, inventory, url));
+    return json(await readInventory(env.DB, inventory, url, user));
   }
   if (request.method === 'GET' && path === '/api/users') {
     requireAdministrator(await currentSession(request, env.DB));
@@ -236,12 +258,6 @@ async function api(request, env) {
   }
   const bodyLimit = imageSlot ? brandingBodyLimit(imageSlot) : management || inventory || path === '/api/settings' ? 16384 : 4096;
   if (Number(request.headers.get('Content-Length')) > bodyLimit) fail('Request too large.', 413);
-  const text = imageSlot ? await readBrandingUpload(request, bodyLimit) : await request.text();
-  if (text.length > bodyLimit) fail('Request too large.', 413);
-  let body;
-  try { body = JSON.parse(text); } catch { fail('Invalid JSON.'); }
-  if (!body || typeof body !== 'object' || Array.isArray(body)) fail('Invalid request.');
-
   // Keep management writes in a separate bucket so editing records never
   // consumes the existing sign-in and account maintenance budget.
   const now = Math.floor(Date.now() / 1000);
@@ -255,6 +271,10 @@ async function api(request, env) {
     env.DB.prepare('DELETE FROM sessions WHERE expires_at < ?').bind(now)
   ]);
   if (limits[0].results[0].hits > 20) return json({ message: 'Too many requests. Try again in a minute.' }, 429, { 'Retry-After': '60' });
+  const text = await readBoundedBody(request, bodyLimit);
+  let body;
+  try { body = JSON.parse(text); } catch { fail('Invalid JSON.'); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) fail('Invalid request.');
 
   if (path === '/api/register') {
     // Usernames are unique ignoring case. Role defaults to user in the schema;
@@ -270,9 +290,11 @@ async function api(request, env) {
   }
   if (path === '/api/login') {
     if (typeof body.username !== 'string' || typeof body.password !== 'string' || body.password.length > 128) fail('Incorrect username or password.', 401);
-    const user = await env.DB.prepare(`SELECT * FROM users WHERE username = ? AND ${ACCOUNT_ACTIVE}`).bind(body.username.trim()).first();
+    const user = await env.DB.prepare(`SELECT * FROM users
+      WHERE username = ? AND password_hash != ? AND ${ACCOUNT_ACTIVE}`)
+      .bind(body.username.trim(), RETIRED_BOOTSTRAP_HASH).first();
     // Do the same password work when an account does not exist.
-    const valid = await verifyPassword(body.password, user?.password_hash || ADMIN_HASH);
+    const valid = await verifyPassword(body.password, user?.password_hash || DUMMY_PASSWORD_HASH);
     if (!user || !valid) fail('Incorrect username or password.', 401);
     const token = await issueSession(env.DB, user);
     await env.DB.prepare('DELETE FROM sessions WHERE expires_at <= ?').bind(Math.floor(Date.now() / 1000)).run();
@@ -280,12 +302,12 @@ async function api(request, env) {
   }
 
   const user = uploadActor ?? await currentSession(request, env.DB);
-  if (!user) fail('Please log in.', 401);
   // These maintenance actions remain available during mandatory password reset.
   if (path === '/api/logout') {
-    await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(user.token_hash).run();
+    if (user) await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(user.token_hash).run();
     return json({ message: 'Logged out.' }, 200, { 'Set-Cookie': cookie('', 0) });
   }
+  if (!user) fail('Please log in.', 401);
   if (path === '/api/change-password') {
     if (typeof body.currentPassword !== 'string' || body.currentPassword.length > 128 ||
       !await verifyPassword(body.currentPassword, user.password_hash)) fail('Current password is incorrect.', 403);
@@ -350,15 +372,19 @@ async function api(request, env) {
         // If either unique key conflicts, the new login is rolled back as well.
         // Select its ID by unique username instead of relying on connection-local
         // last_insert_rowid() state across separate D1 statements.
-        await env.DB.batch([
-          env.DB.prepare(`INSERT INTO users (username, password_hash, role, must_change_password)
-            VALUES (?, ?, ?, 1)`).bind(username, passwordHash, body.role),
-          env.DB.prepare(INSERT_STAFF_LINK).bind(username)
+        const [created] = await env.DB.batch([
+          env.DB.prepare(INSERT_ADMIN_CREATED_USER).bind(username, passwordHash, body.role, user.token_hash),
+          env.DB.prepare(`${INSERT_STAFF_LINK} AND password_hash = ?`).bind(username, user.token_hash, passwordHash)
         ]);
+        if (!created.meta.changes) fail('Your session changed. Please sign in again.', 401);
       } else {
         // Link from the current account row in one statement.
-        const result = await env.DB.prepare(INSERT_STAFF_LINK).bind(username).run();
-        if (!result.meta.changes) fail('No user account matches that username.', 404);
+        const result = await env.DB.prepare(INSERT_STAFF_LINK).bind(username, user.token_hash).run();
+        if (!result.meta.changes) {
+          if (!await env.DB.prepare(`SELECT 1 WHERE ${LIVE_ADMIN}`).bind(user.token_hash).first())
+            fail('Your session changed. Please sign in again.', 401);
+          fail('No user account matches that username.', 404);
+        }
       }
     } catch (error) {
       const details = [error.message, error.cause?.message].filter(Boolean).join(' ');
@@ -380,10 +406,15 @@ async function api(request, env) {
     if (username.toLowerCase() === 'admin') fail('That username is reserved.', 409);
     if (!['user', 'admin'].includes(body.role)) fail('Choose a valid account role.');
     validatePassword(body.password);
-    const result = await env.DB.prepare(`INSERT OR IGNORE INTO users
-      (username, password_hash, role, must_change_password) VALUES (?, ?, ?, 1)`)
-      .bind(username, await hashPassword(body.password), body.role).run();
-    if (!result.meta.changes) fail('That username is already registered.', 409);
+    try {
+      const result = await env.DB.prepare(INSERT_ADMIN_CREATED_USER)
+        .bind(username, await hashPassword(body.password), body.role, user.token_hash).run();
+      if (!result.meta.changes) fail('Your session changed. Please sign in again.', 401);
+    } catch (error) {
+      const details = [error.message, error.cause?.message].filter(Boolean).join(' ');
+      if (/UNIQUE constraint failed:\s*users\.username/i.test(details)) fail('That username is already registered.', 409);
+      throw error;
+    }
     // Do not sign in as the new account or return its temporary password. The
     // existing administrator session remains active after creating an account.
     return json({ message: 'Account created. The user must change their temporary password on first login.' }, 201);
