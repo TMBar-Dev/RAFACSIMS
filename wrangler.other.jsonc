@@ -1,0 +1,21 @@
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "rafacsims",
+  // Backend entry point, bundled separately from the browser application.
+  "main": "./worker.js",
+  "compatibility_date": "2026-11-17",
+  "assets": {
+    // Only generated public files are hosted; never change this to ".".
+    "directory": "./build",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // API requests must reach worker.js instead of the SPA HTML fallback.
+    "run_worker_first": ["/api/*"]
+  },
+  // Use this config for the Worker in the second Cloudflare account.
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "rafacsims",
+    "database_id": "18a4aabd-eeb5-489f-8969-b46393408e5a"
+  }]
+}

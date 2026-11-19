@@ -108,13 +108,16 @@ The Worker initializes missing tables on API access. Keep the existing `DB` bind
 
 | Workers Builds setting | Value |
 | --- | --- |
-| Repository and branch | `mbchwedding28/RAFACSIMS`, `main` |
+| Repository and branch | `TMBar-Dev/RAFACSIMS`, `main` |
 | Root directory | Repository root |
 | Build command | `npm run build` |
-| Deploy command | `npx wrangler deploy` |
+| Deploy command for the original account | `npx wrangler deploy` |
+| Deploy command for the second account | `npx wrangler deploy --config wrangler.other.jsonc` |
 | Worker and D1 database name | `rafacsims` |
 
-Set the Workers Builds root to the repository root. Clear the former `client/` setting if it is still present. Use the asset binding in `wrangler.jsonc` without a separate `--assets` argument. The deploy identity needs access to the Worker and its configured D1 database.
+Set the Workers Builds root to the repository root. Clear the former `client/` setting if it is still present. Both Wrangler configs set the asset binding, so omit a separate `--assets` argument.
+
+Each Cloudflare account has its own D1 database. `wrangler.jsonc` points to the original database. `wrangler.other.jsonc` points to the second account's database. Both expose the binding as `DB`. Set the second Worker's deploy command explicitly so Wrangler selects its database. The deploy identity needs access to the Worker and its configured D1 database.
 
 **Public files.** The build copies the favicon, Apple touch icon, two app icons, manifest and robots file alongside the bundled app. The `build/` binding keeps repository files, SQL exports, secrets and `V1/` outside the public asset directory.
 
