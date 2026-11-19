@@ -37,7 +37,11 @@ const options = {
   target: ['chrome111', 'edge111', 'firefox114', 'safari16.4'],
   jsx: 'automatic',
   // React and Material UI select development/production behavior using this value.
-  define: { 'process.env.NODE_ENV': JSON.stringify(development ? 'development' : 'production') },
+  define: {
+    'process.env.NODE_ENV': JSON.stringify(development ? 'development' : 'production'),
+    // Workers Builds supplies the Git branch on every build, including rebuilds.
+    __RAFACSIMS_PREVIEW__: JSON.stringify(process.env.WORKERS_CI_BRANCH === 'preview')
+  },
   minify: !development,
   sourcemap: development,
   metafile: true,

@@ -287,6 +287,7 @@ function App({ mode, onModeChange }) {
   return (
     <div data-theme={mode} className={showWorkspace ? (printPages.includes(page) ? 'App print-record-page' : 'App') : 'App account-app'}
       style={!showWorkspace ? { '--account-cover': `url("${coverUrl || storesCover}")` } : undefined}>
+      {__RAFACSIMS_PREVIEW__ && <div className="preview-banner">Preview environment</div>}
       <AppBar position="static" elevation={0} className="brand-bar"><Toolbar className="app-toolbar">
         <div className="app-brand">
           <img className={logoUrl ? undefined : 'default-brand-mark'} src={logoUrl || '/app-icon-192.png'} alt=""
